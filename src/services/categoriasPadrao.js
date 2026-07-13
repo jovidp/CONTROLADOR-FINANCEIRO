@@ -51,13 +51,49 @@ export async function inserirCategoriasPadrao(cliente, usuarioId) {
   }
 }
 
+/**
+ * Devolve um tipo de conta que EXISTE para este usuario.
+ *
+ * A conta padrao nasce com o tipo 'corrente', e contas.tipo tem FK para tipos_conta.
+ * Mas o usuario pode apagar os tipos que quiser -- e havia um caminho, todo ele
+ * permitido pela API, que trancava a pessoa para fora da propria conta:
+ *
+ *   1. apaga todas as contas          (permitido: so´ barra se houver transferencia)
+ *   2. apaga o tipo 'corrente'        (permitido: o guard so´ olha se ha´ CONTAS usando)
+ *   3. faz login
+ *
+ * No passo 3 o garantirPadroes via "0 contas" e tentava recriar a Conta Corrente com
+ * o tipo 'corrente' -- que nao existia mais. A FK estourava (23503), o traduzErroPg
+ * transformava em 409 e o LOGIN respondia "Registro vinculado a outros dados".
+ * Consertar exigia estar logado. Sem acesso ao banco, a conta estava perdida.
+ */
+async function tipoValido(cliente, usuarioId, preferido) {
+  const { rows: existe } = await cliente.query(
+    'SELECT chave FROM tipos_conta WHERE usuario_id = $1 AND chave = $2',
+    [usuarioId, preferido],
+  );
+  if (existe[0]) return preferido;
+
+  // Sobrou algum outro tipo? Serve: melhor uma conta com o tipo "errado" do que um
+  // usuario que nao consegue mais entrar.
+  const { rows: qualquer } = await cliente.query(
+    'SELECT chave FROM tipos_conta WHERE usuario_id = $1 ORDER BY id LIMIT 1',
+    [usuarioId],
+  );
+  if (qualquer[0]) return qualquer[0].chave;
+
+  // Nenhum tipo: devolve o kit padrao e usa o preferido, que agora existe.
+  await inserirTiposContaPadrao(cliente, usuarioId);
+  return preferido;
+}
+
 export async function inserirContasPadrao(cliente, usuarioId) {
   for (const [nome, tipo, saldoInicial, cor] of CONTAS_PADRAO) {
     await cliente.query(
       `INSERT INTO contas (usuario_id, nome, tipo, saldo_inicial, cor)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (usuario_id, nome) DO NOTHING`,
-      [usuarioId, nome, tipo, saldoInicial, cor],
+      [usuarioId, nome, await tipoValido(cliente, usuarioId, tipo), saldoInicial, cor],
     );
   }
 }

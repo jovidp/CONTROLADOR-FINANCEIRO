@@ -8,8 +8,7 @@
  */
 
 import { api } from '../api.js';
-import { emitir } from '../state.js';
-import { formMeta, formAporte } from '../forms.js';
+import { excluirCom, formMeta, formAporte } from '../forms.js';
 import {
   el,
   fmtMoeda,
@@ -18,8 +17,6 @@ import {
   hoje,
   skeleton,
   vazio,
-  confirmar,
-  toast,
 } from '../ui.js';
 
 const COR_OK = 'var(--in, #22c55e)';
@@ -315,37 +312,23 @@ function listaAportes(meta) {
 // Acoes
 // =====================================================================
 
-async function excluirMeta(meta) {
-  const ok = await confirmar({
+function excluirMeta(meta) {
+  return excluirCom({
     titulo: 'Excluir meta',
     msg: `A meta "${meta.nome}" e todos os seus aportes serão apagados. Isso não pode ser desfeito.`,
+    acao: () => api.metas.remover(meta.id),
+    sucesso: 'Meta excluída.',
   });
-  if (!ok) return;
-
-  try {
-    await api.metas.remover(meta.id);
-    toast('Meta excluída.', 'ok');
-    emitir();
-  } catch (err) {
-    toast(err?.message || 'Não foi possível excluir a meta.', 'erro');
-  }
 }
 
-async function removerAporte(meta, aporte) {
+function removerAporte(meta, aporte) {
   const valor = num(aporte.valor);
   const rotulo = valor < 0 ? 'resgate' : 'aporte';
 
-  const ok = await confirmar({
+  return excluirCom({
     titulo: `Remover ${rotulo}`,
     msg: `O ${rotulo} de ${fmtMoeda(Math.abs(valor))} em ${fmtData(aporte.data)} será removido de "${meta.nome}".`,
+    acao: () => api.metas.removerAporte(meta.id, aporte.id),
+    sucesso: valor < 0 ? 'Resgate removido.' : 'Aporte removido.',
   });
-  if (!ok) return;
-
-  try {
-    await api.metas.removerAporte(meta.id, aporte.id);
-    toast(valor < 0 ? 'Resgate removido.' : 'Aporte removido.', 'ok');
-    emitir();
-  } catch (err) {
-    toast(err?.message || 'Não foi possível remover o lançamento.', 'erro');
-  }
 }

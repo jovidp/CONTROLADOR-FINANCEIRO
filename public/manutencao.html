@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="pt-BR" data-tema="claro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Em manutenção — Controlador Financeiro</title>
+  <!--
+    Autocontida de proposito: sem <link> para o styles.css, sem <script src>.
+    Esta pagina e´ servida COM o app bloqueado -- se ela dependesse de /styles.css
+    ou de /js/*.js, apareceria sem estilo justamente na hora em que precisa
+    tranquilizar quem abriu o app.
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f5f8;
+      --surface: #ffffff;
+      --borda: #e1e5eb;
+      --texto: #14171c;
+      --texto-fraco: #5d6673;
+      --primaria: #4f46e5;
+      --atencao: #b45309;
+      --atencao-suave: rgba(180, 83, 9, 0.12);
+      --sombra: 0 1px 2px rgba(15, 23, 42, .05), 0 6px 20px rgba(15, 23, 42, .06);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #0d1016;
+        --surface: #161b24;
+        --borda: #262d3a;
+        --texto: #e8ebf0;
+        --texto-fraco: #96a0b0;
+        --primaria: #818cf8;
+        --atencao: #fbbf24;
+        --atencao-suave: rgba(251, 191, 36, .14);
+        --sombra: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 40px rgba(0, 0, 0, .45);
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--texto);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.55;
+    }
+
+    .cartao {
+      width: 100%;
+      max-width: 480px;
+      padding: 40px 32px 32px;
+      text-align: center;
+      background: var(--surface);
+      border: 1px solid var(--borda);
+      border-radius: 14px;
+      box-shadow: var(--sombra);
+    }
+
+    /* O icone pulsa devagar: sinaliza "vivo, trabalhando" sem virar uma
+       animacao ansiosa na cara de quem so´ queria ver o saldo. */
+    .ico {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 20px;
+      display: grid;
+      place-items: center;
+      font-size: 34px;
+      background: var(--atencao-suave);
+      border-radius: 50%;
+      animation: pulso 2.4s ease-in-out infinite;
+    }
+
+    @keyframes pulso {
+      0%, 100% { transform: scale(1);    opacity: 1;   }
+      50%      { transform: scale(1.06); opacity: .82; }
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 650;
+      letter-spacing: -.01em;
+    }
+
+    .motivo {
+      margin-top: 10px;
+      color: var(--texto-fraco);
+      font-size: 15px;
+    }
+
+    .aviso {
+      margin-top: 24px;
+      padding: 14px 16px;
+      text-align: left;
+      background: var(--atencao-suave);
+      border-radius: 9px;
+      color: var(--texto);
+      font-size: 13.5px;
+    }
+
+    .aviso strong { font-weight: 620; }
+
+    .rodape {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--borda);
+      color: var(--texto-fraco);
+      font-size: 12.5px;
+    }
+
+    .marca {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-weight: 600;
+      color: var(--texto);
+    }
+
+    .pontos::after {
+      content: "";
+      animation: pontos 1.6s steps(4, end) infinite;
+    }
+
+    @keyframes pontos {
+      0%   { content: "";    }
+      25%  { content: ".";   }
+      50%  { content: "..";  }
+      75%  { content: "..."; }
+    }
+
+    /* Quem pediu para reduzir movimento nao precisa de icone pulsando nem de
+       reticencias dancando para entender que o app esta´ fora do ar. */
+    @media (prefers-reduced-motion: reduce) {
+      .ico { animation: none; }
+      .pontos::after { content: "..."; animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="cartao" role="status" aria-live="polite">
+    <div class="ico" aria-hidden="true">🔧</div>
+
+    <h1>Estamos em manutenção</h1>
+    <p class="motivo" id="motivo">O servidor está passando por uma manutenção rápida.</p>
+
+    <div class="aviso">
+      <strong>Seus dados estão seguros.</strong> Nada foi perdido — o app volta ao ar
+      sozinho assim que a manutenção terminar. Esta página se atualiza sozinha<span class="pontos"></span>
+    </div>
+
+    <div class="rodape">
+      <span class="marca"><span aria-hidden="true">💰</span> Controlador Financeiro</span>
+      <div id="desde" style="margin-top:6px"></div>
+    </div>
+  </main>
+
+  <script>
+    // O endpoint fica liberado durante a manutencao (server.js), entao da´ para
+    // perguntar de fora se ja´ acabou. Preenchido por textContent, nunca innerHTML.
+    const elMotivo = document.getElementById('motivo');
+    const elDesde = document.getElementById('desde');
+
+    function formatarDesde(iso) {
+      if (!iso) return '';
+      const inicio = new Date(iso);
+      if (Number.isNaN(inicio.getTime())) return '';
+      const min = Math.max(0, Math.round((Date.now() - inicio.getTime()) / 60000));
+      if (min < 1) return 'Começou agora há pouco.';
+      return `Em manutenção há ${min} minuto${min === 1 ? '' : 's'}.`;
+    }
+
+    async function verificar() {
+      try {
+        const resposta = await fetch('/api/manutencao', { cache: 'no-store' });
+        const dados = await resposta.json();
+
+        // Acabou: recarrega e cai no app de verdade.
+        if (!dados.ativo) return location.reload();
+
+        if (dados.motivo) elMotivo.textContent = dados.motivo;
+        elDesde.textContent = formatarDesde(dados.desde);
+      } catch {
+        // Servidor reiniciando no meio da manutencao: continua tentando.
+      }
+    }
+
+    verificar();
+    setInterval(verificar, 5000);
+  </script>
+</body>
+</html>

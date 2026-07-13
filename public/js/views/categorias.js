@@ -11,9 +11,8 @@
  */
 
 import { api, ApiError } from '../api.js';
-import { carregarBase, emitir } from '../state.js';
-import { el, toast, confirmar, skeleton, vazio } from '../ui.js';
-import { formCategoria } from '../forms.js';
+import { el, skeleton, vazio } from '../ui.js';
+import { excluirCom, formCategoria } from '../forms.js';
 
 const COR_PADRAO = '#64748b';
 const ICONE_PADRAO = '📦';
@@ -211,26 +210,17 @@ function msgExclusao(cat) {
   return partes.join(' ');
 }
 
-async function excluir(cat) {
-  const ok = await confirmar({
+function excluir(cat) {
+  return excluirCom({
     titulo: 'Excluir categoria',
     msg: msgExclusao(cat),
     okLabel: 'Excluir',
+    acao: () => api.categorias.remover(cat.id),
+    sucesso: 'Categoria excluída.',
+    // Mexeu em categoria: o cache do state precisa ser refeito ANTES de avisar o app,
+    // senao as outras telas remontam com uma categoria que nao existe mais.
+    recarregar: true,
   });
-  if (!ok) return;
-
-  try {
-    await api.categorias.remover(cat.id);
-  } catch (err) {
-    toast(err?.message || 'Não foi possível excluir a categoria.', 'erro');
-    return;
-  }
-
-  toast('Categoria excluída.', 'ok');
-  // Mexeu em categoria: o cache do state precisa ser refeito ANTES de avisar o app,
-  // senao as outras telas remontam com uma categoria que nao existe mais.
-  await carregarBase();
-  emitir();
 }
 
 // =====================================================================

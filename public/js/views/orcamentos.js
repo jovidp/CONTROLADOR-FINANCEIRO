@@ -7,8 +7,8 @@
  */
 
 import { api } from '../api.js';
-import { state, emitir } from '../state.js';
-import { formOrcamento } from '../forms.js';
+import { state } from '../state.js';
+import { excluirCom, formOrcamento } from '../forms.js';
 import {
   el,
   fmtMoeda,
@@ -16,8 +16,6 @@ import {
   fmtPct,
   skeleton,
   vazio,
-  confirmar,
-  toast,
 } from '../ui.js';
 
 // Cores por status. Vem das variaveis do tema (o fallback mantem a barra legivel
@@ -280,18 +278,12 @@ function cartao(orc, todos) {
 // Acoes
 // =====================================================================
 
-async function excluir(orc) {
-  const ok = await confirmar({
+function excluir(orc) {
+  return excluirCom({
     titulo: 'Excluir orçamento',
     msg: `O limite de ${orc.categoria_nome} será removido. As transações da categoria não são apagadas.`,
+    acao: () => api.orcamentos.remover(orc.id),
+    sucesso: 'Orçamento excluído.',
+    // Sem recarregar: orcamento nao entra no cache do state (nem mexe em conta/categoria).
   });
-  if (!ok) return;
-
-  try {
-    await api.orcamentos.remover(orc.id);
-    toast('Orçamento excluído.', 'ok');
-    emitir();
-  } catch (err) {
-    toast(err?.message || 'Não foi possível excluir o orçamento.', 'erro');
-  }
 }

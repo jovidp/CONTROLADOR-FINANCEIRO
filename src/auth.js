@@ -241,53 +241,107 @@ export function limparCookie(res, req) {
 }
 
 // --- Freio de tentativas ---------------------------------------------
-// Em memoria e global: e´ um app de um usuario so, nao ha o que separar por IP.
-// Reiniciar o servidor zera o freio -- quem tem acesso ao console ja tem acesso
-// ao .env, entao nao ha nada a proteger nesse cenario.
+//
+// Em memoria, POR TENTATIVA (quem + de onde), e nao global.
+//
+// O freio nasceu global, com a justificativa de que "e´ um app de um usuario so´, nao
+// ha´ o que separar". Isso deixou de ser verdade: /api/auth/cadastro e´ publico, o
+// login tem botao de "criar conta" e hoje ha´ varias pessoas no banco. Com o contador
+// global, CINCO senhas erradas de QUALQUER UM trancavam o login de TODO MUNDO por ate´
+// 5 minutos -- negacao de servico de graca, sem nem precisar de uma conta.
+//
+// Reiniciar o servidor zera o freio. Quem tem acesso ao console ja´ tem acesso ao .env,
+// entao nao ha´ o que proteger nesse cenario.
 
 const MAX_FALHAS = 5;
 const BLOQUEIO_BASE_MS = 30_000;
 const BLOQUEIO_MAX_MS = 5 * 60_000;
 const ESQUECER_APOS_MS = 15 * 60_000;
+const MAX_CHAVES = 1000;
 
-let falhas = 0;
-let bloqueadoAte = 0;
-let ultimaFalha = 0;
+/** chave -> { falhas, bloqueadoAte, ultimaFalha } */
+const tentativas = new Map();
 
-/** Segundos restantes de bloqueio (0 = liberado). */
-export function segundosBloqueado() {
-  const restante = bloqueadoAte - Date.now();
+/**
+ * Quem esta´ tentando: usuario + IP.
+ *
+ * So´ o usuario permitiria a um estranho trancar a SUA conta de fora, de qualquer
+ * lugar. So´ o IP permitiria varrer varios usuarios a partir de uma maquina so´.
+ * Os dois juntos travam a forca bruta sem dar a ninguem o poder de trancar outro.
+ */
+export function chaveTentativa(req, usuario) {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || 'local';
+  return `${String(usuario ?? '').toLowerCase()}@${ip}`;
+}
+
+/** Impede que um ataque com usuarios aleatorios faca o Map crescer sem limite. */
+function podar() {
+  if (tentativas.size <= MAX_CHAVES) return;
+  const agora = Date.now();
+  for (const [chave, t] of tentativas) {
+    if (agora - t.ultimaFalha > ESQUECER_APOS_MS && t.bloqueadoAte <= agora) tentativas.delete(chave);
+  }
+  // Ainda cheio (ataque em curso): descarta as mais antigas. O Map do JS preserva a
+  // ordem de insercao, entao as primeiras chaves sao as mais velhas.
+  if (tentativas.size > MAX_CHAVES) {
+    for (const chave of [...tentativas.keys()].slice(0, tentativas.size - MAX_CHAVES)) {
+      tentativas.delete(chave);
+    }
+  }
+}
+
+/** Segundos restantes de bloqueio para esta chave (0 = liberado). */
+export function segundosBloqueado(chave) {
+  const t = tentativas.get(chave);
+  if (!t) return 0;
+  const restante = t.bloqueadoAte - Date.now();
   return restante > 0 ? Math.ceil(restante / 1000) : 0;
 }
 
-export function registrarFalha() {
-  // Quinze minutos sem errar zera a conta. Sem isso, um erro de digitacao hoje
-  // somaria com os de semanas atras e mandaria o dono da casa esperar 5 minutos
-  // -- castigo de ataque, aplicado a quem so trocou uma tecla. O ataque de
-  // verdade e´ rapido, e nessa janela o contador nao decai.
-  if (ultimaFalha && Date.now() - ultimaFalha > ESQUECER_APOS_MS) falhas = 0;
+export function registrarFalha(chave) {
+  const agora = Date.now();
+  const t = tentativas.get(chave) ?? { falhas: 0, bloqueadoAte: 0, ultimaFalha: 0 };
 
-  falhas += 1;
-  ultimaFalha = Date.now();
-  if (falhas < MAX_FALHAS) return;
+  // Quinze minutos sem errar zera a conta. Sem isso, um erro de digitacao hoje somaria
+  // com os de semanas atras e mandaria o dono da casa esperar 5 minutos -- castigo de
+  // ataque, aplicado a quem so´ trocou uma tecla. O ataque de verdade e´ rapido, e
+  // nessa janela o contador nao decai.
+  if (t.ultimaFalha && agora - t.ultimaFalha > ESQUECER_APOS_MS) t.falhas = 0;
 
-  // Dobra a espera a cada falha extra: 30s, 1min, 2min... ate 5min.
-  const espera = Math.min(BLOQUEIO_MAX_MS, BLOQUEIO_BASE_MS * 2 ** (falhas - MAX_FALHAS));
-  bloqueadoAte = Date.now() + espera;
+  t.falhas += 1;
+  t.ultimaFalha = agora;
+
+  if (t.falhas >= MAX_FALHAS) {
+    // Dobra a espera a cada falha extra: 30s, 1min, 2min... ate 5min.
+    const espera = Math.min(BLOQUEIO_MAX_MS, BLOQUEIO_BASE_MS * 2 ** (t.falhas - MAX_FALHAS));
+    t.bloqueadoAte = agora + espera;
+  }
+
+  tentativas.set(chave, t);
+  podar();
 }
 
-export function registrarAcerto() {
-  falhas = 0;
-  bloqueadoAte = 0;
-  ultimaFalha = 0;
+export function registrarAcerto(chave) {
+  tentativas.delete(chave);
 }
 
 // --- Middleware ------------------------------------------------------
 
+/**
+ * Uma sessao so´ vale se aponta para um usuario de verdade.
+ *
+ * A checagem anterior era `Number.isInteger(Number(sessao.id))`, que aceita `id: null`
+ * -- porque Number(null) e´ 0, e 0 e´ inteiro. O id ia como `null` para o `usuario_id`
+ * das consultas e nao casaria com registro nenhum. Nao dava para explorar de fora (o
+ * token e´ assinado com HMAC e criarToken sempre recebe um id real), mas a guarda nao
+ * fazia o que dizia fazer -- e a mesma linha estava copiada em tres lugares.
+ */
+export const sessaoValida = (sessao) => Boolean(sessao) && Number.isInteger(sessao.id) && sessao.id > 0;
+
 /** Barra a requisicao sem sessao valida. 401 = o frontend manda para o login. */
 export function exigirLogin(req, _res, next) {
   const sessao = sessaoDe(req);
-  if (!sessao || !Number.isInteger(Number(sessao.id))) {
+  if (!sessaoValida(sessao)) {
     return next(new HttpError(401, 'Sessão expirada. Faça login de novo.'));
   }
   req.sessao = sessao;

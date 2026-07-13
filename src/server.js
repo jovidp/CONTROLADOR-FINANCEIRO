@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { pool, closePool } from './db.js';
 import { HttpError, traduzErroPg } from './http.js';
-import { exigirLogin, prepararUsuariosDados, sessaoDe } from './auth.js';
+import { exigirLogin, prepararUsuariosDados, sessaoDe, sessaoValida } from './auth.js';
 import { processarRecorrentes } from './services/recorrentes.js';
+import * as manutencao from './manutencao.js';
 
 import auth from './routes/auth.js';
 import categorias from './routes/categorias.js';
@@ -22,12 +23,44 @@ import relatorios from './routes/relatorios.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-const temSessaoValida = (req) => {
-  const sessao = sessaoDe(req);
-  return Boolean(sessao && Number.isInteger(Number(sessao.id)));
-};
+const temSessaoValida = (req) => sessaoValida(sessaoDe(req));
 
 app.use(express.json({ limit: '2mb' }));
+
+// --- Modo de manutencao ----------------------------------------------
+// Vem antes de TUDO (menos das duas rotas isentas abaixo): enquanto um script
+// destrutivo roda, nenhuma escrita nova pode entrar. Um lancamento gravado no meio
+// de um pg_dump nao entraria no backup; um gravado no meio de uma migration poderia
+// violar a constraint que ela acabou de criar.
+
+// Isenta: e´ como a pagina de manutencao descobre que ja´ pode voltar.
+app.get('/api/manutencao', (_req, res) => {
+  const emManutencao = manutencao.estado();
+  res.json({
+    ativo: Boolean(emManutencao),
+    motivo: emManutencao?.motivo ?? null,
+    desde: emManutencao?.desde ?? null,
+  });
+});
+
+app.use((req, res, next) => {
+  const emManutencao = manutencao.estado();
+  if (!emManutencao) return next();
+
+  // Isenta: o `ehEsteApp()` la´ embaixo usa o /api/health para saber se quem esta´
+  // na porta e´ este app. Bloquear o health faria o servidor em manutencao parecer
+  // "outro programa" e a segunda janela mandaria o usuario mudar o PORT.
+  if (req.path === '/api/health') return next();
+
+  // 503 + Retry-After: e´ o par que diz "volte depois", e nao "isto nao existe".
+  res.set('Retry-After', '30');
+  res.status(503);
+
+  if (req.path.startsWith('/api/')) {
+    return res.json({ erro: emManutencao.motivo || 'Servidor em manutenção. Tente de novo em instantes.' });
+  }
+  return res.sendFile(path.join(__dirname, '../public/manutencao.html'));
+});
 
 // --- Porta de entrada das PAGINAS ------------------------------------
 // Sem sessao, a unica pagina que abre e a de login; com sessao, a de login sai
@@ -170,23 +203,34 @@ async function iniciar() {
     return sair(1);
   }
 
-  // Migra o historico antigo para o usuario configurado no .env e garante que
-  // cada sessao tenha um usuario_id para filtrar suas consultas.
-  try {
-    await prepararUsuariosDados();
-  } catch (err) {
-    console.error('[usuarios] falha ao preparar dados:', err.message);
-    return sair(1);
-  }
+  // O boot ESCREVE no banco (adota dados legados, materializa recorrentes vencidas).
+  // Com uma manutencao em curso, subir o servidor nesse instante meteria escrita no
+  // meio do pg_dump/da migration -- exatamente o que o modo de manutencao existe para
+  // impedir. Entao o servidor sobe (para mostrar a pagina de manutencao), mas calado.
+  const emManutencao = manutencao.estado();
+  if (emManutencao) {
+    console.log(`\n  [manutenção] ${emManutencao.motivo}`);
+    console.log('  O servidor vai subir apenas para exibir a página de manutenção.');
+    console.log('  Nenhuma escrita no banco será feita até a manutenção terminar.\n');
+  } else {
+    // Migra o historico antigo para o usuario configurado no .env e garante que
+    // cada sessao tenha um usuario_id para filtrar suas consultas.
+    try {
+      await prepararUsuariosDados();
+    } catch (err) {
+      console.error('[usuarios] falha ao preparar dados:', err.message);
+      return sair(1);
+    }
 
-  // Materializa lancamentos fixos cuja data ja venceu.
-  try {
-    const { rows: usuarios } = await pool.query('SELECT id FROM usuarios ORDER BY id');
-    let gerados = 0;
-    for (const usuario of usuarios) gerados += await processarRecorrentes(usuario.id);
-    if (gerados > 0) console.log(`  ${gerados} lançamento(s) recorrente(s) gerado(s).`);
-  } catch (err) {
-    console.error('[recorrentes] falha ao processar:', err.message);
+    // Materializa lancamentos fixos cuja data ja venceu.
+    try {
+      const { rows: usuarios } = await pool.query('SELECT id FROM usuarios ORDER BY id');
+      let gerados = 0;
+      for (const usuario of usuarios) gerados += await processarRecorrentes(usuario.id);
+      if (gerados > 0) console.log(`  ${gerados} lançamento(s) recorrente(s) gerado(s).`);
+    } catch (err) {
+      console.error('[recorrentes] falha ao processar:', err.message);
+    }
   }
 
   if (await portaEmUso(config.port)) {

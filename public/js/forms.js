@@ -53,10 +53,18 @@ const ICONE_CATEGORIA_PADRAO = '📦';
 const COR_META_PADRAO = '#6366f1';
 const ICONE_META_PADRAO = '🏆';
 
-const TIPOS_TRANSACAO = [
+// Duas listas porque os backends divergem, e um botao a mais aqui vira 400 la:
+// so´ POST/PUT /api/transacoes aceita 'transferencia' (src/routes/transacoes.js);
+// categorias e recorrentes validam contra ['receita','despesa'] e recusam o resto.
+const TIPOS_LANCAMENTO = [
   { valor: 'despesa', rotulo: 'Despesa' },
   { valor: 'receita', rotulo: 'Receita' },
   { valor: 'transferencia', rotulo: 'Transferência' },
+];
+
+const TIPOS_RECEITA_DESPESA = [
+  { valor: 'despesa', rotulo: 'Despesa' },
+  { valor: 'receita', rotulo: 'Receita' },
 ];
 
 // Os tipos de conta sao dados do usuario (tabela tipos_conta), e nao uma lista fixa:
@@ -303,7 +311,7 @@ export function formTransacao(tx) {
         name: 'tipo',
         label: 'Tipo',
         tipo: 'segmentado',
-        opcoes: TIPOS_TRANSACAO,
+        opcoes: TIPOS_LANCAMENTO,
         obrigatorio: true,
         largura: 'cheio',
       },
@@ -627,7 +635,7 @@ export function formCategoria(cat) {
         name: 'tipo',
         label: 'Tipo',
         tipo: 'segmentado',
-        opcoes: TIPOS_TRANSACAO,
+        opcoes: TIPOS_RECEITA_DESPESA,
         obrigatorio: true,
         largura: 'cheio',
         desabilitado: tipoTravado,
@@ -1014,7 +1022,7 @@ export function formRecorrente(rec) {
         name: 'tipo',
         label: 'Tipo',
         tipo: 'segmentado',
-        opcoes: TIPOS_TRANSACAO,
+        opcoes: TIPOS_RECEITA_DESPESA,
         obrigatorio: true,
         largura: 'cheio',
       },
@@ -1113,15 +1121,18 @@ export function formRecorrente(rec) {
 /**
  * Confirma, executa `acao()` e avisa as views. Devolve true se excluiu.
  * `recarregar`: true quando a exclusao mexe em categoria/conta (ou no saldo delas).
+ * `okLabel`: sem ele o botao diria "Confirmar" -- as telas que dizem "Excluir" no
+ * botao precisam continuar dizendo.
  */
 export async function excluirCom({
   titulo,
   msg,
+  okLabel,
   acao,
   sucesso = 'Registro excluído.',
   recarregar = false,
 }) {
-  const confirmado = await confirmar({ titulo, msg });
+  const confirmado = await confirmar({ titulo, msg, okLabel });
   if (!confirmado) return false;
 
   try {

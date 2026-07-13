@@ -1,14 +1,26 @@
 /**
- * Popula o banco com dados de exemplo realistas (~8 meses de histórico).
+ * DESTRUTIVO: popula a conta de UM usuario com dados de exemplo realistas
+ * (~8 meses de historico), APAGANDO os lancamentos que ele tiver.
  *
- * Re-executavel: comeca APAGANDO os dados de exemplo (transacoes, metas,
- * aportes, orcamentos e recorrentes) e recria tudo do zero, dentro de UMA
+ * Re-executavel: comeca apagando (transacoes, parcelamentos, metas, aportes,
+ * orcamentos e recorrentes DAQUELE usuario) e recria tudo do zero, dentro de UMA
  * transacao. Categorias e contas base sao garantidas com ON CONFLICT DO NOTHING.
+ *
+ * Exige USUARIO=<id> e CONFIRMAR=<nome do banco>. Faz backup antes de apagar.
+ *
+ * Ate´ a migration 006 este script fazia `DELETE FROM transacoes` SEM WHERE -- e
+ * so´ nao apagou a vida financeira de todos os cadastrados porque o `ON CONFLICT
+ * (nome)` logo abaixo apontava para uma constraint que a propria 006 tinha dropado:
+ * o script quebrava com erro 42P10 e o ROLLBACK salvava os dados. Consertar o
+ * ON CONFLICT sem escopar os DELETEs teria sido catastrofico.
  *
  * Datas: aritmetica em UTC e formatacao manual 'AAAA-MM-DD'. Nunca toISOString()
  * sobre data local -- em fuso negativo isso volta o dia.
  */
 import { withTransaction, closePool } from '../db.js';
+import { exigirConfirmacao, exigirUsuario, encerrarCom } from './guardas.js';
+import { backup } from './backup.js';
+import { sob } from '../manutencao.js';
 
 const MESES_HISTORICO = 8;
 const MESES_NO_VERMELHO = [2, 5]; // indices dentro da janela; nunca o mes corrente
@@ -153,140 +165,178 @@ const ORCAMENTOS = [
 // =====================================================================
 
 async function main() {
+  exigirConfirmacao('db:seed', [
+    'Este comando APAGA os lançamentos de UM usuário e põe dados de exemplo no lugar:',
+    '  transacoes, parcelamentos, meta_aportes, metas, orcamentos, recorrentes.',
+    'As categorias e as contas são preservadas.',
+  ]);
+
+  const usuario = await exigirUsuario('db:seed');
+  const uid = usuario.id;
+
   const meses = janelaDeMeses(MESES_HISTORICO);
   const primeiro = meses[0];
   const ultimo = meses[meses.length - 1];
 
-  const resumo = await withTransaction(async (client) => {
-    console.log('\n  Limpando os dados de exemplo (transações, metas, aportes, orçamentos e recorrentes).');
-    console.log('  Categorias e contas são preservadas.\n');
-    await client.query('DELETE FROM transacoes');
-    await client.query('DELETE FROM meta_aportes');
-    await client.query('DELETE FROM metas');
-    await client.query('DELETE FROM orcamentos');
-    await client.query('DELETE FROM recorrentes');
+  const resumo = await sob(`Carregando dados de exemplo para ${usuario.usuario}. Já voltamos.`, async () => {
+    await backup('pre-seed');
 
-    // --- base (a migration 002 ja traz; aqui e so garantia, sem duplicar) ---
-    await client.query(
-      `INSERT INTO contas (nome, tipo, saldo_inicial, cor)
-       VALUES ('Conta Corrente', 'corrente', 0, '#3b82f6')
-       ON CONFLICT (nome) DO NOTHING`,
-    );
-    // Estas duas contas sao do proprio seed: DO UPDATE para que re-executar
-    // reproduza exatamente o mesmo estado (o saldo_inicial precisa bater com
-    // os gastos gerados abaixo).
-    for (const c of CONTAS_EXTRA) {
+    return withTransaction(async (client) => {
+      console.log(`\n  Limpando os lançamentos de "${usuario.usuario}" (id ${uid}).`);
+      console.log('  Categorias e contas são preservadas. Outros usuários não são tocados.\n');
+
+      // parcelamentos entra na lista: o CASCADE vai de parcelamentos -> transacoes,
+      // e nao o contrario. Sem ele, sobrariam compras parceladas sem nenhuma parcela.
+      await client.query('DELETE FROM transacoes    WHERE usuario_id = $1', [uid]);
+      await client.query('DELETE FROM parcelamentos WHERE usuario_id = $1', [uid]);
       await client.query(
-        `INSERT INTO contas (nome, tipo, saldo_inicial, cor) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (nome) DO UPDATE
-           SET tipo = EXCLUDED.tipo, saldo_inicial = EXCLUDED.saldo_inicial, cor = EXCLUDED.cor`,
-        [c.nome, c.tipo, c.saldo_inicial, c.cor],
+        'DELETE FROM meta_aportes WHERE meta_id IN (SELECT id FROM metas WHERE usuario_id = $1)', [uid],
       );
-    }
+      await client.query('DELETE FROM metas       WHERE usuario_id = $1', [uid]);
+      await client.query('DELETE FROM orcamentos  WHERE usuario_id = $1', [uid]);
+      await client.query('DELETE FROM recorrentes WHERE usuario_id = $1', [uid]);
 
-    const { rows: cats } = await client.query('SELECT id, nome, tipo FROM categorias');
-    const { rows: contas } = await client.query('SELECT id, nome FROM contas');
-    const idCategoria = new Map(cats.map((c) => [`${c.tipo}:${c.nome}`, c.id]));
-    const idConta = new Map(contas.map((c) => [c.nome, c.id]));
-
-    const buscaCategoria = (tipo, nome) => {
-      const id = idCategoria.get(`${tipo}:${nome}`);
-      if (!id) throw new Error(`Categoria "${nome}" (${tipo}) não existe. Rode "npm run db:migrate" antes do seed.`);
-      return id;
-    };
-    const buscaConta = (nome) => {
-      const id = idConta.get(nome);
-      if (!id) throw new Error(`Conta "${nome}" não existe.`);
-      return id;
-    };
-
-    // --- transacoes ---
-    const txs = gerarTransacoes(meses);
-    for (const t of txs) {
+      // --- base (o cadastro ja traz o kit padrao; aqui e so garantia, sem duplicar) ---
+      // ON CONFLICT (usuario_id, nome): a unique global em `nome` morreu na migration
+      // 006, quando duas pessoas passaram a poder ter, cada uma, a sua "Conta Corrente".
       await client.query(
-        `INSERT INTO transacoes (descricao, valor, tipo, data, categoria_id, conta_id, observacao)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [t.descricao, t.valor, t.tipo, t.data, buscaCategoria(t.tipo, t.categoria), buscaConta(t.conta), t.observacao],
+        `INSERT INTO contas (usuario_id, nome, tipo, saldo_inicial, cor)
+         VALUES ($1, 'Conta Corrente', 'corrente', 0, '#3b82f6')
+         ON CONFLICT (usuario_id, nome) DO NOTHING`,
+        [uid],
       );
-    }
+      // Estas duas contas sao do proprio seed: DO UPDATE para que re-executar
+      // reproduza exatamente o mesmo estado (o saldo_inicial precisa bater com
+      // os gastos gerados abaixo).
+      for (const c of CONTAS_EXTRA) {
+        await client.query(
+          `INSERT INTO contas (usuario_id, nome, tipo, saldo_inicial, cor) VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (usuario_id, nome) DO UPDATE
+             SET tipo = EXCLUDED.tipo, saldo_inicial = EXCLUDED.saldo_inicial, cor = EXCLUDED.cor`,
+          [uid, c.nome, c.tipo, c.saldo_inicial, c.cor],
+        );
+      }
 
-    // --- orcamentos (sobre o gasto real do mes corrente) ---
-    const inicioMes = iso(HOJE.ano, HOJE.mes, 1);
-    const fimMes = iso(HOJE.ano, HOJE.mes, diasNoMes(HOJE.ano, HOJE.mes));
-    const { rows: gastos } = await client.query(
-      `SELECT categoria_id, SUM(valor) AS gasto
-         FROM transacoes
-        WHERE tipo = 'despesa' AND data >= $1 AND data <= $2
-        GROUP BY categoria_id`,
-      [inicioMes, fimMes],
-    );
-    const gastoPorCategoria = new Map(gastos.map((g) => [g.categoria_id, Number(g.gasto)]));
-
-    for (const o of ORCAMENTOS) {
-      const catId = buscaCategoria('despesa', o.categoria);
-      const gasto = gastoPorCategoria.get(catId) || 0;
-      const bruto = gasto > 0 ? gasto * o.fator : o.padrao;
-      const limite = Math.max(10, Math.round(bruto / 10) * 10); // arredonda para dezena, nunca zero
-      await client.query('INSERT INTO orcamentos (categoria_id, limite) VALUES ($1, $2)', [catId, limite]);
-    }
-
-    // --- metas ---
-    const { rows: [reserva] } = await client.query(
-      `INSERT INTO metas (nome, valor_alvo, prazo, cor, icone) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      ['Reserva de emergência', 20000.0, iso(HOJE.ano + 1, 6, 30), '#22c55e', '🛡️'],
-    );
-    const { rows: [viagem] } = await client.query(
-      `INSERT INTO metas (nome, valor_alvo, prazo, cor, icone) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      ['Viagem para o Chile', 12000.0, iso(HOJE.ano + 1, 12, 20), '#6366f1', '✈️'],
-    );
-
-    let aportes = 0;
-    // Reserva: aporte todo mes -> perto de concluir (~85% do alvo).
-    for (const m of meses) {
-      await client.query(
-        `INSERT INTO meta_aportes (meta_id, valor, data, observacao) VALUES ($1, $2, $3, $4)`,
-        [reserva.id, dinheiro(1900, 2300), dataNoMes(m, 6), 'Aporte mensal automático'],
+      const { rows: cats } = await client.query(
+        'SELECT id, nome, tipo FROM categorias WHERE usuario_id = $1', [uid],
       );
-      aportes++;
-    }
-    // Viagem: comecou agora -> so os dois ultimos meses.
-    for (const m of meses.slice(-2)) {
-      await client.query(
-        `INSERT INTO meta_aportes (meta_id, valor, data, observacao) VALUES ($1, $2, $3, $4)`,
-        [viagem.id, dinheiro(550, 750), dataNoMes(m, 25), null],
+      const { rows: contas } = await client.query(
+        'SELECT id, nome FROM contas WHERE usuario_id = $1', [uid],
       );
-      aportes++;
-    }
+      const idCategoria = new Map(cats.map((c) => [`${c.tipo}:${c.nome}`, c.id]));
+      const idConta = new Map(contas.map((c) => [c.nome, c.id]));
 
-    // --- recorrentes ---
-    // proxima_data SEMPRE no mes que vem: se caisse hoje ou antes, o
-    // processarRecorrentes() do boot ja duplicaria os lancamentos do seed.
-    const prox = new Date(Date.UTC(HOJE.ano, HOJE.mes, 1)); // mes seguinte
-    const pAno = prox.getUTCFullYear();
-    const pMes = prox.getUTCMonth() + 1;
+      const buscaCategoria = (tipo, nome) => {
+        const id = idCategoria.get(`${tipo}:${nome}`);
+        if (!id) throw new Error(`Categoria "${nome}" (${tipo}) não existe para este usuário.`);
+        return id;
+      };
+      const buscaConta = (nome) => {
+        const id = idConta.get(nome);
+        if (!id) throw new Error(`Conta "${nome}" não existe para este usuário.`);
+        return id;
+      };
 
-    const recorrentes = [
-      ['Salário', 7200.0, 'receita', 'Salário', 'Conta Corrente', 'mensal', iso(pAno, pMes, 5)],
-      ['Aluguel', 1850.0, 'despesa', 'Moradia', 'Conta Corrente', 'mensal', iso(pAno, pMes, 10)],
-      ['Netflix', 44.9, 'despesa', 'Assinaturas', 'Conta Corrente', 'mensal', iso(pAno, pMes, 20)],
-    ];
-    for (const [descricao, valor, tipo, categoria, conta, frequencia, proximaData] of recorrentes) {
-      await client.query(
-        `INSERT INTO recorrentes (descricao, valor, tipo, categoria_id, conta_id, frequencia, proxima_data, ativa)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true)`,
-        [descricao, valor, tipo, buscaCategoria(tipo, categoria), buscaConta(conta), frequencia, proximaData],
+      // --- transacoes ---
+      const txs = gerarTransacoes(meses);
+      for (const t of txs) {
+        await client.query(
+          `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, categoria_id, conta_id, observacao)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [uid, t.descricao, t.valor, t.tipo, t.data,
+            buscaCategoria(t.tipo, t.categoria), buscaConta(t.conta), t.observacao],
+        );
+      }
+
+      // --- orcamentos (sobre o gasto real do mes corrente) ---
+      const inicioMes = iso(HOJE.ano, HOJE.mes, 1);
+      const fimMes = iso(HOJE.ano, HOJE.mes, diasNoMes(HOJE.ano, HOJE.mes));
+      const { rows: gastos } = await client.query(
+        `SELECT categoria_id, SUM(valor) AS gasto
+           FROM transacoes
+          WHERE usuario_id = $1 AND tipo = 'despesa' AND data >= $2 AND data <= $3
+          GROUP BY categoria_id`,
+        [uid, inicioMes, fimMes],
       );
-    }
+      const gastoPorCategoria = new Map(gastos.map((g) => [g.categoria_id, Number(g.gasto)]));
 
-    const { rows: [tot] } = await client.query(
-      `SELECT count(*)::int AS n,
-              COALESCE(SUM(valor) FILTER (WHERE tipo = 'receita'), 0) AS receitas,
-              COALESCE(SUM(valor) FILTER (WHERE tipo = 'despesa'), 0) AS despesas,
-              min(data) AS de, max(data) AS ate
-         FROM transacoes`,
-    );
+      for (const o of ORCAMENTOS) {
+        const catId = buscaCategoria('despesa', o.categoria);
+        const gasto = gastoPorCategoria.get(catId) || 0;
+        const bruto = gasto > 0 ? gasto * o.fator : o.padrao;
+        const limite = Math.max(10, Math.round(bruto / 10) * 10); // arredonda para dezena, nunca zero
+        await client.query(
+          'INSERT INTO orcamentos (usuario_id, categoria_id, limite) VALUES ($1, $2, $3)',
+          [uid, catId, limite],
+        );
+      }
 
-    return { ...tot, aportes, orcamentos: ORCAMENTOS.length, recorrentes: recorrentes.length };
+      // --- metas ---
+      const { rows: [reserva] } = await client.query(
+        `INSERT INTO metas (usuario_id, nome, valor_alvo, prazo, cor, icone)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [uid, 'Reserva de emergência', 20000.0, iso(HOJE.ano + 1, 6, 30), '#22c55e', '🛡️'],
+      );
+      const { rows: [viagem] } = await client.query(
+        `INSERT INTO metas (usuario_id, nome, valor_alvo, prazo, cor, icone)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [uid, 'Viagem para o Chile', 12000.0, iso(HOJE.ano + 1, 12, 20), '#6366f1', '✈️'],
+      );
+
+      let aportes = 0;
+      // Reserva: aporte todo mes -> perto de concluir (~85% do alvo).
+      for (const m of meses) {
+        await client.query(
+          `INSERT INTO meta_aportes (usuario_id, meta_id, valor, data, observacao)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [uid, reserva.id, dinheiro(1900, 2300), dataNoMes(m, 6), 'Aporte mensal automático'],
+        );
+        aportes++;
+      }
+      // Viagem: comecou agora -> so os dois ultimos meses.
+      for (const m of meses.slice(-2)) {
+        await client.query(
+          `INSERT INTO meta_aportes (usuario_id, meta_id, valor, data, observacao)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [uid, viagem.id, dinheiro(550, 750), dataNoMes(m, 25), null],
+        );
+        aportes++;
+      }
+
+      // --- recorrentes ---
+      // proxima_data SEMPRE no mes que vem: se caisse hoje ou antes, o
+      // processarRecorrentes() do boot ja duplicaria os lancamentos do seed.
+      const prox = new Date(Date.UTC(HOJE.ano, HOJE.mes, 1)); // mes seguinte
+      const pAno = prox.getUTCFullYear();
+      const pMes = prox.getUTCMonth() + 1;
+
+      const recorrentes = [
+        ['Salário', 7200.0, 'receita', 'Salário', 'Conta Corrente', 'mensal', iso(pAno, pMes, 5)],
+        ['Aluguel', 1850.0, 'despesa', 'Moradia', 'Conta Corrente', 'mensal', iso(pAno, pMes, 10)],
+        ['Netflix', 44.9, 'despesa', 'Assinaturas', 'Conta Corrente', 'mensal', iso(pAno, pMes, 20)],
+      ];
+      for (const [descricao, valor, tipo, categoria, conta, frequencia, proximaData] of recorrentes) {
+        await client.query(
+          `INSERT INTO recorrentes
+             (usuario_id, descricao, valor, tipo, categoria_id, conta_id, frequencia, proxima_data, ativa)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)`,
+          [uid, descricao, valor, tipo,
+            buscaCategoria(tipo, categoria), buscaConta(conta), frequencia, proximaData],
+        );
+      }
+
+      const { rows: [tot] } = await client.query(
+        `SELECT count(*)::int AS n,
+                COALESCE(SUM(valor) FILTER (WHERE tipo = 'receita'), 0) AS receitas,
+                COALESCE(SUM(valor) FILTER (WHERE tipo = 'despesa'), 0) AS despesas,
+                min(data) AS de, max(data) AS ate
+           FROM transacoes
+          WHERE usuario_id = $1`,
+        [uid],
+      );
+
+      return { ...tot, aportes, orcamentos: ORCAMENTOS.length, recorrentes: recorrentes.length };
+    });
   });
 
   const brl = (n) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -296,13 +346,14 @@ async function main() {
   console.log(`  + ${resumo.recorrentes} recorrentes ativas (próxima data no mês que vem)`);
   console.log(`\n  Receitas: ${brl(resumo.receitas)}   Despesas: ${brl(resumo.despesas)}   Saldo: ${brl(resumo.receitas - resumo.despesas)}`);
   console.log(`  Período coberto: ${MESES_HISTORICO} meses (${pad(primeiro.mes)}/${primeiro.ano} a ${pad(ultimo.mes)}/${ultimo.ano})`);
-  console.log('\nOK: dados de exemplo carregados.\n');
+  console.log(`\nOK: dados de exemplo carregados na conta de "${usuario.usuario}".\n`);
 }
 
 main()
   .catch((err) => {
-    console.error('\nFALHA no seed:', err.message);
-    console.error('  Nenhum dado foi alterado (a transação sofreu ROLLBACK).\n');
-    process.exitCode = 1;
+    if (!err.message?.includes('confirmação') && !err.message?.includes('usuário')) {
+      console.error('  Nenhum dado foi alterado (a transação sofreu ROLLBACK).');
+    }
+    encerrarCom(err, 'db:seed');
   })
   .finally(closePool);

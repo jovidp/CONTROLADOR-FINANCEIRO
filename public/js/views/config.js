@@ -10,9 +10,9 @@
  */
 
 import { api, ApiError } from '../api.js';
-import { carregarBase, emitir, tipoContaPorChave } from '../state.js';
-import { el, fmtMoeda, hoje, skeleton, vazio, confirmar, toast } from '../ui.js';
-import { formConta, formTipoConta } from '../forms.js';
+import { tipoContaPorChave } from '../state.js';
+import { el, fmtMoeda, hoje, skeleton, vazio, toast } from '../ui.js';
+import { excluirCom, formConta, formTipoConta } from '../forms.js';
 
 const COR_SAIDA = 'var(--out, #ef4444)';
 const COR_PADRAO = '#64748b';
@@ -237,25 +237,18 @@ function blocoArquivadas(arquivadas) {
   );
 }
 
-async function excluirConta(conta) {
-  const ok = await confirmar({
+function excluirConta(conta) {
+  return excluirCom({
     titulo: 'Excluir conta',
     msg:
       `A conta "${conta.nome}" será excluída. As transações lançadas nela NÃO são apagadas: ` +
       'elas ficam sem conta. Se você só quer tirá-la da frente, prefira arquivar (editar → arquivada).',
     okLabel: 'Excluir',
-  });
-  if (!ok) return;
-
-  try {
-    await api.contas.remover(conta.id);
+    acao: () => api.contas.remover(conta.id),
+    sucesso: 'Conta excluída.',
     // Mexeu em conta: recarrega a base antes de avisar os observadores.
-    await carregarBase();
-    toast('Conta excluída.', 'ok');
-    emitir();
-  } catch (err) {
-    toast(err?.message || 'Não foi possível excluir a conta.', 'erro');
-  }
+    recarregar: true,
+  });
 }
 
 // =====================================================================
@@ -357,7 +350,7 @@ function cartaoTipo(tipo) {
   );
 }
 
-async function excluirTipo(tipo) {
+function excluirTipo(tipo) {
   // Tipo em uso o backend recusa (409) -- avisar aqui evita o modal de confirmacao
   // seguido de um erro, que faria o usuario achar que a exclusao "falhou".
   if (num(tipo.contas) > 0) {
@@ -365,21 +358,15 @@ async function excluirTipo(tipo) {
     return;
   }
 
-  const ok = await confirmar({
+  return excluirCom({
     titulo: 'Excluir tipo de conta',
     msg: `O tipo "${tipo.rotulo}" será excluído. Nenhuma conta usa ele, então nada mais muda.`,
     okLabel: 'Excluir',
+    acao: () => api.tiposConta.remover(tipo.id),
+    sucesso: 'Tipo de conta excluído.',
+    // state.tiposConta alimenta o select de tipo do formulario de conta.
+    recarregar: true,
   });
-  if (!ok) return;
-
-  try {
-    await api.tiposConta.remover(tipo.id);
-    await carregarBase();
-    toast('Tipo de conta excluído.', 'ok');
-    emitir();
-  } catch (err) {
-    toast(err?.message || 'Não foi possível excluir o tipo.', 'erro');
-  }
 }
 
 // =====================================================================

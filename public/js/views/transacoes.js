@@ -8,8 +8,8 @@
 
 import { api } from '../api.js';
 import { state, carregarBase, emitir } from '../state.js';
-import { el, fmtMoeda, fmtData, toast, confirmar, skeleton, vazio } from '../ui.js';
-import { formTransacao } from '../forms.js';
+import { el, fmtMoeda, fmtData, toast, skeleton, vazio } from '../ui.js';
+import { excluirCom, formTransacao } from '../forms.js';
 
 const POR_PAGINA = 25;
 const DEBOUNCE_MS = 300;
@@ -606,25 +606,16 @@ function celulaValor(tx) {
   );
 }
 
-async function excluir(tx) {
-  const ok = await confirmar({
+function excluir(tx) {
+  return excluirCom({
     titulo: 'Excluir transação',
     msg: `Excluir "${tx.descricao}" (${fmtMoeda(tx.valor)})? Esta ação não pode ser desfeita.`,
+    acao: () => api.transacoes.remover(tx.id),
+    sucesso: 'Transação excluída.',
+    // Mexe no saldo das contas (vw_saldo_contas): recarrega a base e avisa o app.
+    // O main.js remonta esta view, entao nao chamamos carregar() aqui (request duplicado).
+    recarregar: true,
   });
-  if (!ok) return;
-
-  try {
-    await api.transacoes.remover(tx.id);
-  } catch (err) {
-    toast(err?.message || 'Não foi possível excluir a transação.', 'erro');
-    return;
-  }
-
-  toast('Transação excluída.', 'ok');
-  // Mexe no saldo das contas (vw_saldo_contas): recarrega a base e avisa o app.
-  // O main.js remonta esta view, entao nao chamamos carregar() aqui (request duplicado).
-  await carregarBase();
-  emitir();
 }
 
 /** Esconder nao apaga: a linha continua no banco, so´ para de somar. Reversivel. */
@@ -637,8 +628,17 @@ async function alternarOculta(tx) {
   }
 
   toast(tx.oculta ? 'Lançamento voltou a contar.' : 'Lançamento oculto: saiu dos totais.', 'ok');
+
   // Sai do saldo das contas (vw_saldo_contas) e dos graficos: a base envelheceu.
-  await carregarBase();
+  // O try/catch nao e´ decorativo: o PATCH ja´ foi gravado, e uma falha ao RELER a base
+  // (rede caiu, sessao expirou) pulava o emitir() -- a view nao remontava e a linha
+  // ficava na tela do jeito antigo, embaixo de um toast verde dizendo que deu certo.
+  // Mesmo motivo do try/catch em depoisDeSalvar().
+  try {
+    await carregarBase();
+  } catch {
+    // A view remontada mostra o erro; aqui, engolir e´ o certo.
+  }
   emitir();
 }
 

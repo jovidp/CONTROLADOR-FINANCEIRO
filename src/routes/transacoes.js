@@ -367,6 +367,36 @@ router.put(
 
     const atualizada = await withTransaction(async (client) => {
       await validarVinculos(client, t, req.sessao.id);
+
+      // Uma parcela nao e´ um lancamento solto: ela pertence a uma compra parcelada,
+      // e o parcelamento guarda o valor_total e o total_parcelas. Mexer no valor (ou
+      // virar a linha em transferencia) por aqui deixava a soma das parcelas diferente
+      // do total da compra -- a tela de parcelamentos passava a mostrar um total e um
+      // conjunto de parcelas que se contradiziam, sem nenhum aviso.
+      //
+      // O que NAO afeta a aritmetica (descricao, observacao, data, categoria, conta)
+      // continua editavel: o incomodo aqui e´ so´ para o que quebra a conta.
+      const { rows: [atual] } = await client.query(
+        'SELECT valor, tipo, parcelamento_id, parcela_num FROM transacoes WHERE id = $1 AND usuario_id = $2 FOR UPDATE',
+        [id, req.sessao.id],
+      );
+      if (!atual) throw notFound('Transação não encontrada.');
+
+      if (atual.parcelamento_id !== null) {
+        if (Number(t.valor) !== Number(atual.valor)) {
+          throw conflict(
+            `Esta é a parcela ${atual.parcela_num} de uma compra parcelada. Mudar o valor de uma parcela sozinha faria a soma das parcelas não bater com o total da compra. Exclua o parcelamento inteiro e lance de novo com o valor certo.`,
+            'valor',
+          );
+        }
+        if (t.tipo !== atual.tipo) {
+          throw conflict(
+            'Não dá para mudar o tipo de uma parcela de compra parcelada.',
+            'tipo',
+          );
+        }
+      }
+
       const { rowCount } = await client.query(
         `UPDATE transacoes
             SET descricao = $1,
@@ -500,8 +530,28 @@ router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const id = idParam(req.params.id);
-    const { rowCount } = await query('DELETE FROM transacoes WHERE id = $1 AND usuario_id = $2', [id, req.sessao.id]);
-    if (rowCount === 0) throw notFound('Transação não encontrada.');
+
+    await withTransaction(async (client) => {
+      const { rows: [tx] } = await client.query(
+        'SELECT parcelamento_id, parcela_num FROM transacoes WHERE id = $1 AND usuario_id = $2 FOR UPDATE',
+        [id, req.sessao.id],
+      );
+      if (!tx) throw notFound('Transação não encontrada.');
+
+      // Apagar UMA parcela abria um buraco impossivel de tapar: o parcelamento ficava
+      // com menos parcelas que o total_parcelas, e a unique transacoes_parcela_uk
+      // (parcelamento_id, parcela_num) impedia recriar justamente a que faltava.
+      // A saida certa e´ apagar a compra inteira -- que ja´ leva as parcelas em CASCADE.
+      if (tx.parcelamento_id !== null) {
+        throw conflict(
+          `Esta é a parcela ${tx.parcela_num} de uma compra parcelada e não pode ser excluída sozinha. Exclua o parcelamento inteiro (as parcelas somem junto).`,
+          'parcelamento_id',
+        );
+      }
+
+      await client.query('DELETE FROM transacoes WHERE id = $1 AND usuario_id = $2', [id, req.sessao.id]);
+    });
+
     res.status(204).end();
   }),
 );

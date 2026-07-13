@@ -13,11 +13,15 @@
     "senha": "node src/scripts/senha.js",
     "db:create": "node src/scripts/create-db.js",
     "db:migrate": "node src/scripts/migrate.js",
+    "db:backup": "node src/scripts/backup.js",
     "db:seed": "node src/scripts/seed.js",
     "db:limpar": "node src/scripts/limpar.js",
     "db:reset": "node src/scripts/reset.js",
     "setup": "npm run db:create && npm run db:migrate",
-    "smoke": "node src/scripts/smoke.js"
+    "smoke": "node src/scripts/smoke.js",
+    "manutencao": "node src/scripts/manutencao.js",
+    "manutencao:on": "node src/scripts/manutencao.js on",
+    "manutencao:off": "node src/scripts/manutencao.js off"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

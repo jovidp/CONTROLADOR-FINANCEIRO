@@ -148,6 +148,20 @@ router.delete(
         );
       }
 
+      // Ficar com ZERO tipos e´ um beco sem saida: sem nenhum tipo nao da´ para criar
+      // conta nenhuma (contas.tipo tem FK para tipos_conta), e a tela de nova conta
+      // abre com o select vazio. Sempre sobra pelo menos um.
+      const { rows: [{ total }] } = await cliente.query(
+        'SELECT count(*)::int AS total FROM tipos_conta WHERE usuario_id = $1',
+        [req.sessao.id],
+      );
+      if (total <= 1) {
+        throw conflict(
+          'Este é o seu último tipo de conta. Crie outro antes de excluir este — sem nenhum tipo, não seria possível criar contas.',
+          'id',
+        );
+      }
+
       await cliente.query('DELETE FROM tipos_conta WHERE id = $1 AND usuario_id = $2', [id, req.sessao.id]);
     });
 

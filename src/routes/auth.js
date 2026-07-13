@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   cadastrarUsuario,
   cadastroStatus,
+  chaveTentativa,
   conferirCredenciais,
   criarToken,
   gravarCookie,
@@ -10,6 +11,7 @@ import {
   registrarFalha,
   segundosBloqueado,
   sessaoDe,
+  sessaoValida,
 } from '../auth.js';
 import { asyncHandler, booleano, HttpError, texto } from '../http.js';
 
@@ -26,24 +28,28 @@ function senhaValida(senha) {
  * a sessao nasce. O freio de tentativas mora em auth.js.
  */
 router.post('/login', asyncHandler(async (req, res) => {
-  const espera = segundosBloqueado();
-  if (espera > 0) {
-    throw new HttpError(429, `Muitas tentativas. Tente de novo em ${espera}s.`);
-  }
-
+  // O usuario e´ lido ANTES da checagem de bloqueio porque agora o freio e´ por
+  // usuario+IP, e nao global: sem saber quem esta´ tentando, nao ha´ o que checar.
   const usuario = texto(req.body?.usuario, 'usuario', { max: 60 });
   const senha = texto(req.body?.senha, 'senha', { max: 200 });
   const lembrar = booleano(req.body?.lembrar);
 
+  const chave = chaveTentativa(req, usuario);
+
+  const espera = segundosBloqueado(chave);
+  if (espera > 0) {
+    throw new HttpError(429, `Muitas tentativas. Tente de novo em ${espera}s.`);
+  }
+
   const credencial = await conferirCredenciais(usuario, senha);
   if (!credencial) {
-    registrarFalha();
+    registrarFalha(chave);
     // Mensagem unica de proposito: dizer "usuario nao existe" entregaria metade
     // da credencial a quem esta chutando.
     throw new HttpError(401, 'Usuário ou senha incorretos.');
   }
 
-  registrarAcerto();
+  registrarAcerto(chave);
   gravarCookie(res, criarToken({ lembrar, usuario: credencial.usuario, usuarioId: credencial.id }), req);
   res.json({ usuario });
 }));
@@ -86,7 +92,7 @@ router.post('/logout', (req, res) => {
 /** Usada pelo frontend no boot: 200 sempre, com ou sem sessao. */
 router.get('/sessao', (req, res) => {
   const sessao = sessaoDe(req);
-  const valida = Boolean(sessao && Number.isInteger(Number(sessao.id)));
+  const valida = sessaoValida(sessao);
   res.json({
     autenticado: valida,
     usuario: valida ? sessao.u : null,

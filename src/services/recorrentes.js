@@ -138,11 +138,19 @@ export async function processarRecorrentes(usuarioId) {
       }
 
       if (ocorrencias.length > 0) {
+        // ON CONFLICT DO NOTHING sobre transacoes_recorrente_data_uk (migration 014):
+        // se aquela data JA´ foi materializada para esta recorrente, pula em silencio
+        // em vez de duplicar o lancamento (ou estourar um 500 na cara do usuario).
+        //
+        // A idempotencia deixa de depender de proxima_data nunca andar para tras --
+        // e ela andava: religar uma recorrente encerrada reenviava, pela tela, um
+        // proxima_data que apontava para uma ocorrencia ja´ gerada.
         const { rowCount } = await client.query(
           `INSERT INTO transacoes
              (usuario_id, descricao, valor, tipo, data, categoria_id, conta_id, recorrente_id)
              SELECT $1, $2, $3, $4, d, $5, $6, $7
-             FROM unnest($8::date[]) AS d`,
+             FROM unnest($8::date[]) AS d
+             ON CONFLICT (recorrente_id, data) WHERE recorrente_id IS NOT NULL DO NOTHING`,
           [
             usuarioId,
             rec.descricao,

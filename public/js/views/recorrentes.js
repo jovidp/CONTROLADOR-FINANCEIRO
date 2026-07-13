@@ -13,8 +13,8 @@
 
 import { api, ApiError } from '../api.js';
 import { carregarBase, emitir } from '../state.js';
-import { el, fmtMoeda, fmtData, hoje, toast, confirmar, skeleton, vazio } from '../ui.js';
-import { formRecorrente } from '../forms.js';
+import { el, fmtMoeda, fmtData, hoje, toast, skeleton, vazio } from '../ui.js';
+import { excluirCom, formRecorrente } from '../forms.js';
 
 const FREQUENCIA_ROTULO = {
   diaria: 'Diária',
@@ -363,26 +363,19 @@ function celulaAcoes(rec) {
   );
 }
 
-async function excluir(rec) {
-  const ok = await confirmar({
+function excluir(rec) {
+  return excluirCom({
     titulo: 'Excluir recorrência',
     msg:
       `Excluir "${rec.descricao}"? As transações que ela já gerou PERMANECEM no histórico — ` +
       'elas apenas deixam de estar vinculadas a esta recorrência. ' +
       'O que para é a geração de novos lançamentos. Esta ação não pode ser desfeita.',
     okLabel: 'Excluir',
+    acao: () => api.recorrentes.remover(rec.id),
+    sucesso: 'Recorrência excluída.',
+    // Sem recarregar: excluir a recorrente nao gera nem apaga transacao, entao
+    // saldo de conta e cache de categoria seguem valendo.
   });
-  if (!ok) return;
-
-  try {
-    await api.recorrentes.remover(rec.id);
-  } catch (err) {
-    toast(err?.message || 'Não foi possível excluir a recorrência.', 'erro');
-    return;
-  }
-
-  toast('Recorrência excluída.', 'ok');
-  emitir();
 }
 
 async function processarAgora(botao) {
@@ -409,7 +402,15 @@ async function processarAgora(botao) {
 
   // Gerar transacao mexe no saldo das contas (vw_saldo_contas): recarrega a base
   // antes de avisar o app. emitir() remonta esta view, entao o botao some junto.
-  await carregarBase();
+  //
+  // O try/catch importa: os lancamentos JA´ foram gerados no banco. Uma falha ao reler
+  // a base pulava o emitir(), a tela nao remontava, e o usuario via "3 lançamentos
+  // gerados" com a lista intacta -- e clicava de novo. Mesmo motivo de depoisDeSalvar().
+  try {
+    await carregarBase();
+  } catch {
+    // A view remontada mostra o erro; aqui, engolir e´ o certo.
+  }
   emitir();
 }
 

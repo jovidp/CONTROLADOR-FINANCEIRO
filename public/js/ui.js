@@ -269,13 +269,14 @@ export function confirmar({ titulo = 'Confirmar', msg = '', okLabel = 'Confirmar
     const sim = responder(true);
     const nao = responder(false);
 
+    // So´ ESC. Enter NAO confirma por atalho: confirmar() so´ guarda acao destrutiva e
+    // irreversivel, e a auto-repeticao de um Enter segurado no botao 🗑️ chegava aqui e
+    // respondia "sim" antes de o dialogo ser lido. Quem quer confirmar pelo teclado ja´
+    // tem o Enter nativo do botao -- o btnSim.focus() la´ embaixo poe o foco nele.
     const noEsc = (ev) => {
       if (ev.key === 'Escape') {
         ev.preventDefault();
         encerrar(false);
-      } else if (ev.key === 'Enter') {
-        ev.preventDefault();
-        encerrar(true);
       }
     };
 

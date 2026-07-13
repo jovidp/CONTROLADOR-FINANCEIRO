@@ -16,6 +16,7 @@ import { api } from './api.js';
 import { state, setMes, carregarBase, onMudanca } from './state.js';
 import { confirmar, el, fecharConfirmacao, fecharModal, fmtMesLongo, toast } from './ui.js';
 import { formTransacao } from './forms.js';
+import { redesenhar } from './charts.js';
 
 import * as dashboard from './views/dashboard.js';
 import * as transacoes from './views/transacoes.js';
@@ -236,9 +237,12 @@ function alternarTema() {
   } catch {
     // Sem persistencia o tema ainda vale para esta sessao.
   }
-  // Os graficos sao SVG com cores lidas das CSS vars na hora do desenho:
-  // sem remontar, eles ficariam com a paleta do tema antigo.
-  montarView();
+  // Os graficos sao SVG com cores lidas das CSS vars na hora do desenho: sem
+  // repintar, ficariam com a paleta do tema antigo. Só eles dependem do tema em JS
+  // (o resto e´ CSS, que ja´ acompanha o data-tema) -- por isso redesenhar() e nao
+  // montarView(), que refaria toda a rede da view (8 requisicoes no painel) para
+  // trocar cor de SVG, e ainda perderia filtro/scroll da tela.
+  redesenhar();
 }
 
 // =====================================================================
@@ -404,7 +408,7 @@ function ligarEventos() {
   window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
     if (temaSalvo()) return;
     aplicarTema(temaDoSistema());
-    montarView();
+    redesenhar();
   });
 
   // Qualquer escrita (view ou formulario) termina em emitir(): a view ativa

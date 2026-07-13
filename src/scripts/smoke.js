@@ -33,9 +33,24 @@ const client = await pool.connect();
 try {
   await client.query('BEGIN');
 
+  // Desde a migration 006 o app e´ multiusuario, e desde a 012 usuario_id e´ NOT NULL.
+  // Este arquivo continuava inserindo sem dono e buscando categoria por nome em TODO o
+  // banco -- com varias pessoas cadastradas, `WHERE nome = 'Moradia'` volta uma linha
+  // de cada uma e o teste pegava "alguma". Tudo aqui roda como UM usuario, escolhido
+  // logo abaixo.
+  const { rows: us } = await client.query('SELECT id FROM usuarios ORDER BY id LIMIT 1');
+  if (!us.length) {
+    console.log('\n  Nenhum usuário cadastrado. Rode o app uma vez e crie o login.\n');
+    await client.query('ROLLBACK');
+    client.release();
+    await closePool();
+    process.exit(1);
+  }
+  const usuarioId = us[0].id;
+
   const { rows: cats } = await client.query(
-    `SELECT id, tipo FROM categorias WHERE nome = ANY($1)`,
-    [['Salário', 'Moradia']],
+    `SELECT id, tipo FROM categorias WHERE usuario_id = $1 AND nome = ANY($2)`,
+    [usuarioId, ['Salário', 'Moradia']],
   );
   const receita = cats.find((c) => c.tipo === 'receita');
   const despesa = cats.find((c) => c.tipo === 'despesa');
@@ -43,58 +58,113 @@ try {
 
   await esperaErro(
     client,
-    `INSERT INTO transacoes (descricao, valor, tipo, data, categoria_id)
-     VALUES ('x', 10, 'despesa', CURRENT_DATE, $1)`,
-    [receita.id],
+    `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, categoria_id)
+     VALUES ($1, 'x', 10, 'despesa', CURRENT_DATE, $2)`,
+    [usuarioId, receita.id],
     'despesa NAO pode usar categoria de receita (FK composta)',
   );
 
   await esperaErro(
     client,
-    `INSERT INTO transacoes (descricao, valor, tipo, data) VALUES ('x', -5, 'despesa', CURRENT_DATE)`,
-    [],
+    `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data) VALUES ($1, 'x', -5, 'despesa', CURRENT_DATE)`,
+    [usuarioId],
     'valor negativo e rejeitado (CHECK valor > 0)',
   );
 
   await esperaErro(
     client,
-    `INSERT INTO transacoes (descricao, valor, tipo, data) VALUES ('   ', 5, 'despesa', CURRENT_DATE)`,
-    [],
+    `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data) VALUES ($1, '   ', 5, 'despesa', CURRENT_DATE)`,
+    [usuarioId],
     'descricao em branco e rejeitada',
   );
 
   await esperaErro(
     client,
-    `INSERT INTO transacoes (descricao, valor, tipo, data) VALUES ('x', 5, 'investimento', CURRENT_DATE)`,
-    [],
-    'tipo fora de (receita, despesa) e rejeitado',
+    `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data) VALUES ($1, 'x', 5, 'investimento', CURRENT_DATE)`,
+    [usuarioId],
+    'tipo fora de (receita, despesa, transferencia) e rejeitado',
   );
 
   await esperaErro(
     client,
-    `INSERT INTO orcamentos (categoria_id, limite) VALUES ($1, 100)`,
-    [receita.id],
+    `INSERT INTO orcamentos (usuario_id, categoria_id, limite) VALUES ($1, $2, 100)`,
+    [usuarioId, receita.id],
     'orcamento NAO pode apontar para categoria de receita',
   );
 
+  // ===================================================================
+  //  ISOLAMENTO ENTRE USUARIOS (migration 012)
+  //
+  //  Ate´ a 012 isto era garantido SO´ pelo JS (validarVinculos): o banco aceitava,
+  //  de bom grado, uma transacao de A apontando para a conta de B, e aceitava linha
+  //  sem dono nenhum. Uma rota nova que esquecesse a checagem vazava dados entre
+  //  pessoas -- em silencio. Agora quem recusa e´ o banco.
+  // ===================================================================
+  await esperaErro(
+    client,
+    `INSERT INTO transacoes (descricao, valor, tipo, data) VALUES ('orfa', 10, 'despesa', CURRENT_DATE)`,
+    [],
+    'transacao SEM DONO (usuario_id NULL) e rejeitada',
+  );
+
+  const { rows: outros } = await client.query(
+    'SELECT id FROM usuarios WHERE id <> $1 ORDER BY id LIMIT 1',
+    [usuarioId],
+  );
+  if (!outros.length) {
+    console.log('  SKIP  vinculo cruzado (so ha um usuario cadastrado)');
+  } else {
+    const outro = outros[0].id;
+    const { rows: catOutro } = await client.query(
+      `SELECT id FROM categorias WHERE usuario_id = $1 AND tipo = 'despesa' LIMIT 1`, [outro],
+    );
+    const { rows: contaOutro } = await client.query(
+      'SELECT id FROM contas WHERE usuario_id = $1 LIMIT 1', [outro],
+    );
+
+    if (catOutro.length) {
+      await esperaErro(
+        client,
+        `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, categoria_id)
+         VALUES ($1, 'roubo', 10, 'despesa', CURRENT_DATE, $2)`,
+        [usuarioId, catOutro[0].id],
+        'transacao NAO pode usar a CATEGORIA de outro usuario',
+      );
+    }
+    if (contaOutro.length) {
+      await esperaErro(
+        client,
+        `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, conta_id)
+         VALUES ($1, 'roubo', 10, 'despesa', CURRENT_DATE, $2)`,
+        [usuarioId, contaOutro[0].id],
+        'transacao NAO pode usar a CONTA de outro usuario',
+      );
+    }
+  }
+
   const { rows: ins } = await client.query(
-    `INSERT INTO transacoes (descricao, valor, tipo, data, categoria_id)
-     VALUES ('almoço', 42.5, 'despesa', CURRENT_DATE, $1) RETURNING id, valor, data`,
-    [despesa.id],
+    `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, categoria_id)
+     VALUES ($1, 'almoço', 42.5, 'despesa', CURRENT_DATE, $2) RETURNING id, valor, data`,
+    [usuarioId, despesa.id],
   );
   checar('despesa valida e aceita', ins.length === 1);
   checar('numeric volta como Number, nao string', typeof ins[0].valor === 'number', `(veio ${typeof ins[0].valor})`);
   checar('DATE volta como string AAAA-MM-DD (sem shift de fuso)',
     typeof ins[0].data === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ins[0].data), `(veio ${ins[0].data})`);
 
+  // Orcamento de teste numa categoria SEM orcamento: o seed ja´ ocupa Alimentação,
+  // Transporte, Contas & Taxas e Lazer, e a unique (usuario_id, categoria_id) rejeitaria
+  // um segundo. Por isso o smoke usa Moradia -- e por isso o seed evita Moradia.
+  await client.query('SAVEPOINT orc');
+  await client.query('DELETE FROM orcamentos WHERE usuario_id = $1 AND categoria_id = $2', [usuarioId, despesa.id]);
   const { rows: orc } = await client.query(
-    `INSERT INTO orcamentos (categoria_id, limite) VALUES ($1, 900) RETURNING id`,
-    [despesa.id],
+    `INSERT INTO orcamentos (usuario_id, categoria_id, limite) VALUES ($1, $2, 900) RETURNING id`,
+    [usuarioId, despesa.id],
   );
   await esperaErro(
     client,
-    `INSERT INTO orcamentos (categoria_id, limite) VALUES ($1, 500)`,
-    [despesa.id],
+    `INSERT INTO orcamentos (usuario_id, categoria_id, limite) VALUES ($1, $2, 500)`,
+    [usuarioId, despesa.id],
     'orcamento duplicado por categoria e rejeitado (UNIQUE)',
   );
 
@@ -107,6 +177,7 @@ try {
   const { rows: orcCount } = await client.query('SELECT count(*)::int AS n FROM orcamentos WHERE id = $1', [orc[0].id]);
   checar('apagar categoria remove o orcamento em cascata', orcCount[0].n === 0);
   await client.query('ROLLBACK TO SAVEPOINT del');
+  await client.query('ROLLBACK TO SAVEPOINT orc');
 
   const { rows: saldo } = await client.query('SELECT * FROM vw_saldo_contas LIMIT 1');
   checar('view vw_saldo_contas responde', saldo.length >= 0);
@@ -119,12 +190,7 @@ try {
   //  somado das duas nao mudar, e ela nao pode aparecer como receita nem
   //  como despesa em lugar nenhum.
   // ===================================================================
-  const { rows: us } = await client.query('SELECT id FROM usuarios ORDER BY id LIMIT 1');
-
-  if (!us.length) {
-    console.log('  SKIP  transferencia (nenhum usuario cadastrado)');
-  } else {
-    const usuarioId = us[0].id;
+  {
     const { rows: tc } = await client.query(
       'SELECT chave FROM tipos_conta WHERE usuario_id = $1 ORDER BY id LIMIT 1',
       [usuarioId],
@@ -240,6 +306,32 @@ try {
     checar('transferencia OCULTA sai do saldo dos dois lados (volta a 1000 / 100)',
       Number(ocultaOrigem.saldo) === 1000 && Number(ocultaDestino.saldo) === 100,
       `(veio ${ocultaOrigem.saldo} / ${ocultaDestino.saldo})`);
+
+    // =================================================================
+    //  RECORRENTE NAO DUPLICA (migration 014)
+    //
+    //  Religar o switch de uma recorrente ENCERRADA reenviava, pela propria tela, um
+    //  proxima_data que apontava para uma ocorrencia JA´ materializada -- e o
+    //  processamento seguinte lancava a mesma transacao de novo. Cada liga/desliga
+    //  somava mais uma copia. O indice unico parcial fecha isso no banco.
+    // =================================================================
+    const { rows: rec } = await client.query(
+      `INSERT INTO recorrentes (usuario_id, descricao, valor, tipo, frequencia, proxima_data, conta_id)
+       VALUES ($1, '__smoke fixo', 100, 'despesa', 'mensal', CURRENT_DATE, $2) RETURNING id`,
+      [usuarioId, origem],
+    );
+    await client.query(
+      `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, conta_id, recorrente_id)
+       VALUES ($1, '__smoke fixo', 100, 'despesa', CURRENT_DATE, $2, $3)`,
+      [usuarioId, origem, rec[0].id],
+    );
+    await esperaErro(
+      client,
+      `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, conta_id, recorrente_id)
+       VALUES ($1, '__smoke fixo', 100, 'despesa', CURRENT_DATE, $2, $3)`,
+      [usuarioId, origem, rec[0].id],
+      'a MESMA recorrente nao gera duas transacoes na mesma data',
+    );
   }
 
   await client.query('ROLLBACK'); // nada e persistido

@@ -2,3 +2,8 @@ node_modules/
 .env
 *.log
 backups/
+
+# Estado de execucao da maquina, nao do projeto: existe so enquanto uma manutencao
+# esta em curso AQUI. Versionado, faria um `git pull` por na tela de manutencao um
+# app que esta perfeitamente no ar.
+manutencao.flag

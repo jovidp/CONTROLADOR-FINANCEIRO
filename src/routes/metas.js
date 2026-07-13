@@ -22,8 +22,15 @@ const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 // silenciosamente pela cor padrao, em vez de o usuario receber um 400.
 const RE_COR = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
 
-/** Cor e sempre opcional no contrato; ausente = mantem/usa o default do banco. */
-function cor(valor) {
+/**
+ * Cor e´ sempre opcional no contrato; ausente = mantem/usa o default do banco.
+ *
+ * Chama-se `validaCor`, e nao `cor`, porque os handlers declaram um `const cor` local
+ * -- e esse const SOMBREAVA a funcao, deixando-a inalcancavel. A validacao existia no
+ * arquivo, parecia certa na leitura, e nunca rodava: `POST /api/metas` com
+ * {"cor":"red;--z:1"} gravava o texto cru e devolvia 201 em vez de 400.
+ */
+function validaCor(valor) {
   const s = texto(valor, 'cor', { obrigatorio: false, max: 7 });
   if (s === null) return null;
   if (!RE_COR.test(s)) throw badRequest('"cor" deve ser um hexadecimal como #4f46e5.', 'cor');
@@ -152,7 +159,7 @@ router.post(
     const nome = texto(corpo.nome, 'nome');
     const valorAlvo = dinheiro(corpo.valor_alvo, 'valor_alvo');
     const prazo = validaData(corpo.prazo, 'prazo', { obrigatorio: false });
-    const cor = texto(corpo.cor, 'cor', { obrigatorio: false, max: 20 });
+    const cor = validaCor(corpo.cor);
     const icone = texto(corpo.icone, 'icone', { obrigatorio: false, max: 20 });
 
     // Colunas vem desta whitelist fixa (nunca do corpo); cor/icone so entram quando
@@ -196,7 +203,7 @@ router.put(
     const nome = texto(corpo.nome, 'nome');
     const valorAlvo = dinheiro(corpo.valor_alvo, 'valor_alvo');
     const prazo = validaData(corpo.prazo, 'prazo', { obrigatorio: false }); // null limpa o prazo
-    const cor = texto(corpo.cor, 'cor', { obrigatorio: false, max: 20 });
+    const cor = validaCor(corpo.cor);
     const icone = texto(corpo.icone, 'icone', { obrigatorio: false, max: 20 });
     // ausente = mantem o valor atual (COALESCE no SQL)
     const concluida =
@@ -222,6 +229,16 @@ router.put(
         throw traduzConflito(err);
       }
       if (rowCount === 0) throw notFound('Meta não encontrada.');
+
+      // Mudar o valor_alvo muda o que significa "concluida" -- e o front nao manda o
+      // campo, entao o COALESCE acima preservava o valor antigo. Sem reavaliar, uma
+      // meta de R$ 1.000 ja´ batida e depois reajustada para R$ 5.000 continuava
+      // marcada como CONCLUIDA, exibindo 20% de progresso. O POST e o DELETE de aporte
+      // ja´ reavaliavam; so´ o PUT nao.
+      //
+      // So´ quando o cliente NAO mandou `concluida`: quem manda o campo esta´ dizendo
+      // explicitamente qual e´ o estado, e reavaliar por cima anularia o pedido dele.
+      if (concluida === null) await reavaliarConcluida(client, id, req.sessao.id);
       return buscarMeta(client, id, req.sessao.id);
     });
 
@@ -254,10 +271,13 @@ router.post(
       const { rowCount } = await client.query('SELECT 1 FROM metas WHERE id = $1 AND usuario_id = $2 FOR UPDATE', [id, req.sessao.id]);
       if (rowCount === 0) throw notFound('Meta não encontrada.');
 
+      // usuario_id no aporte (migration 012): e´ o que deixa a FK composta
+      // (usuario_id, meta_id) -> metas impedir, NO BANCO, um aporte cair na meta de
+      // outra pessoa. Antes, a unica barreira era o WHERE do JS.
       await client.query(
-        `INSERT INTO meta_aportes (meta_id, valor, data, observacao)
-         VALUES ($1, $2::numeric, $3::date, $4)`,
-        [id, valor, dataAporte, observacao],
+        `INSERT INTO meta_aportes (usuario_id, meta_id, valor, data, observacao)
+         VALUES ($1, $2, $3::numeric, $4::date, $5)`,
+        [req.sessao.id, id, valor, dataAporte, observacao],
       );
 
       await reavaliarConcluida(client, id, req.sessao.id);
