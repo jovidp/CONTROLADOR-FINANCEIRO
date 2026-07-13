@@ -1023,6 +1023,31 @@ th.col-acoes { text-align: right; white-space: nowrap; }
 .tx-sem-categoria,
 .tx-sem-conta { color: var(--texto-fraco); font-style: italic; font-size: 0.86rem; }
 
+/* --- Transferencia entre contas ---
+   Deliberadamente NEUTRA (cinza, sem sinal): ela nao e´ ganho nem perda, so´ mudou de
+   conta. Verde/vermelho aqui diria que o seu dinheiro aumentou ou diminuiu -- e nao
+   aumentou nem diminuiu. */
+.tx-tag-transferencia {
+  --cor: var(--muted);
+  font-variant-numeric: normal;
+}
+
+.valor-transferencia { color: var(--texto-fraco); }
+
+.tx-transferencia-contas {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.tx-transferencia-seta {
+  color: var(--texto-fraco);
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
 .tx-acoes,
 .budget-acoes,
 .goal-acoes,

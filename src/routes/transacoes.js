@@ -17,7 +17,13 @@ import { FREQUENCIAS, proximaData } from '../services/recorrentes.js';
 
 const router = Router();
 
-const TIPOS = ['receita', 'despesa'];
+/**
+ * 'transferencia' move dinheiro entre duas contas suas: nao entrou nem saiu do seu
+ * patrimonio, entao ela NAO e´ receita nem despesa. Toda soma de dinheiro do sistema
+ * (KPIs, evolucao, donut, anual, resumo, gasto do orcamento) filtra por 'receita' ou
+ * 'despesa' -- logo a transferencia fica de fora delas por construcao. Ver 011_transferencias.sql.
+ */
+const TIPOS = ['receita', 'despesa', 'transferencia'];
 
 /**
  * A "natureza" do lancamento nao e´ uma coluna: ela e´ DERIVADA de quem criou a
@@ -73,6 +79,9 @@ const SELECT_TRANSACAO = `
          t.conta_id,
          con.nome  AS conta_nome,
          con.cor   AS conta_cor,
+         t.conta_destino_id,
+         dst.nome  AS conta_destino_nome,
+         dst.cor   AS conta_destino_cor,
          t.observacao,
          t.recorrente_id,
          t.oculta,
@@ -84,6 +93,7 @@ const SELECT_TRANSACAO = `
     FROM transacoes t
     LEFT JOIN categorias    cat ON cat.id = t.categoria_id AND cat.usuario_id = t.usuario_id
     LEFT JOIN contas        con ON con.id = t.conta_id AND con.usuario_id = t.usuario_id
+    LEFT JOIN contas        dst ON dst.id = t.conta_destino_id AND dst.usuario_id = t.usuario_id
     LEFT JOIN parcelamentos par ON par.id = t.parcelamento_id AND par.usuario_id = t.usuario_id
 `;
 
@@ -132,10 +142,13 @@ function montaFiltros(q, usuarioId) {
     cond.push(`t.categoria_id = $${params.length}`);
   }
 
+  // A conta filtrada casa dos DOIS lados: uma transferencia que ENTRA nela tem a
+  // conta em conta_destino_id, nao em conta_id -- e ela precisa aparecer no extrato
+  // da conta, senao o dinheiro chega e some da vista.
   const contaId = idOpcional(q.conta_id, 'conta_id');
   if (contaId !== null) {
     params.push(contaId);
-    cond.push(`t.conta_id = $${params.length}`);
+    cond.push(`(t.conta_id = $${params.length} OR t.conta_destino_id = $${params.length})`);
   }
 
   const busca = texto(q.q, 'q', { obrigatorio: false, max: 200 });
@@ -250,15 +263,39 @@ router.get(
 
 /** Valida o corpo de POST/PUT. O vinculo categoria x tipo e garantido pela FK composta. */
 function lerCorpo(body) {
-  return {
+  const t = {
     descricao: texto(body.descricao, 'descricao', { max: 200 }),
     valor: dinheiro(body.valor, 'valor'),
     tipo: enumerado(body.tipo, 'tipo', TIPOS),
     data: validaData(body.data, 'data'),
     categoria_id: idOpcional(body.categoria_id, 'categoria_id'),
     conta_id: idOpcional(body.conta_id, 'conta_id'),
+    conta_destino_id: idOpcional(body.conta_destino_id, 'conta_destino_id'),
     observacao: texto(body.observacao, 'observacao', { obrigatorio: false, max: 1000 }),
   };
+
+  if (t.tipo === 'transferencia') {
+    // As duas contas sao obrigatorias -- sem uma delas o dinheiro sai de lugar
+    // nenhum ou nao chega em lugar nenhum. (Fora da transferencia, conta_id segue
+    // opcional, como sempre foi.)
+    if (t.conta_id === null) {
+      throw badRequest('Escolha a conta de origem da transferência.', 'conta_id');
+    }
+    if (t.conta_destino_id === null) {
+      throw badRequest('Escolha a conta de destino da transferência.', 'conta_destino_id');
+    }
+    if (t.conta_id === t.conta_destino_id) {
+      throw badRequest('A conta de destino precisa ser diferente da de origem.', 'conta_destino_id');
+    }
+    // Categoria classifica gasto/ganho; um dinheiro que continua sendo seu nao tem
+    // o que classificar. Zeramos em vez de recusar: trocar o tipo no formulario ja´
+    // preenchido nao deve virar um erro na cara do usuario.
+    t.categoria_id = null;
+  } else {
+    t.conta_destino_id = null;
+  }
+
+  return t;
 }
 
 async function lerTransacao(client, id, usuarioId) {
@@ -278,6 +315,15 @@ async function validarVinculos(client, t, usuarioId) {
     const { rowCount } = await client.query('SELECT 1 FROM contas WHERE id = $1 AND usuario_id = $2', [t.conta_id, usuarioId]);
     if (!rowCount) throw badRequest('Conta inválida para este usuário.', 'conta_id');
   }
+  // O isolamento por usuario da conta de destino e´ garantido aqui, no JS: nao ha´
+  // FK composta (usuario_id, conta_id) no schema -- mesma escolha ja´ feita para conta_id.
+  if (t.conta_destino_id !== null) {
+    const { rowCount } = await client.query('SELECT 1 FROM contas WHERE id = $1 AND usuario_id = $2', [
+      t.conta_destino_id,
+      usuarioId,
+    ]);
+    if (!rowCount) throw badRequest('Conta de destino inválida para este usuário.', 'conta_destino_id');
+  }
 }
 
 // POST /api/transacoes
@@ -289,10 +335,21 @@ router.post(
     const criada = await withTransaction(async (client) => {
       await validarVinculos(client, t, req.sessao.id);
       const { rows } = await client.query(
-        `INSERT INTO transacoes (usuario_id, descricao, valor, tipo, data, categoria_id, conta_id, observacao)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO transacoes
+           (usuario_id, descricao, valor, tipo, data, categoria_id, conta_id, conta_destino_id, observacao)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id`,
-        [req.sessao.id, t.descricao, t.valor, t.tipo, t.data, t.categoria_id, t.conta_id, t.observacao],
+        [
+          req.sessao.id,
+          t.descricao,
+          t.valor,
+          t.tipo,
+          t.data,
+          t.categoria_id,
+          t.conta_id,
+          t.conta_destino_id,
+          t.observacao,
+        ],
       );
       return lerTransacao(client, rows[0].id, req.sessao.id);
     });
@@ -318,9 +375,22 @@ router.put(
                 data = $4,
                 categoria_id = $5,
                 conta_id = $6,
-                observacao = $7
-          WHERE id = $8 AND usuario_id = $9`,
-        [t.descricao, t.valor, t.tipo, t.data, t.categoria_id, t.conta_id, t.observacao, id, req.sessao.id],
+                conta_destino_id = $7,
+                observacao = $8,
+                atualizado_em = now()
+          WHERE id = $9 AND usuario_id = $10`,
+        [
+          t.descricao,
+          t.valor,
+          t.tipo,
+          t.data,
+          t.categoria_id,
+          t.conta_id,
+          t.conta_destino_id,
+          t.observacao,
+          id,
+          req.sessao.id,
+        ],
       );
       if (rowCount === 0) throw notFound('Transação não encontrada.');
       return lerTransacao(client, id, req.sessao.id);
@@ -388,6 +458,12 @@ router.post(
       // Uma parcela nao se repete para sempre -- ela pertence a uma compra que tem fim.
       if (tx.parcelamento_id !== null) {
         throw badRequest('Uma parcela de compra parcelada não pode virar despesa fixa.', 'fixar');
+      }
+      // `recorrentes` nao tem conta de destino (e o CHECK dela so´ aceita receita/despesa):
+      // fixar uma transferencia geraria todo mes um lancamento sem para onde ir. Barramos
+      // aqui, com mensagem, em vez de deixar o INSERT abaixo estourar um 23514 generico.
+      if (tx.tipo === 'transferencia') {
+        throw badRequest('Transferências entre contas ainda não podem virar lançamento fixo.', 'fixar');
       }
 
       const { rows } = await client.query(

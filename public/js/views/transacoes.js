@@ -234,9 +234,10 @@ function montarFiltros() {
   const selTipo = el(
     'select',
     { class: 'campo tx-filtro tx-filtro-tipo', 'aria-label': 'Filtrar por tipo' },
-    el('option', { value: '' }, 'Receitas e despesas'),
+    el('option', { value: '' }, 'Tudo'),
     el('option', { value: 'receita' }, 'Só receitas'),
     el('option', { value: 'despesa' }, 'Só despesas'),
+    el('option', { value: 'transferencia' }, 'Só transferências'),
   );
   selTipo.value = filtros.tipo;
 
@@ -542,6 +543,14 @@ function celulaDescricao(tx) {
 }
 
 function celulaCategoria(tx) {
+  // Transferencia nao tem categoria por definicao (o backend a zera). Dizer "Sem
+  // categoria" aqui pareceria um cadastro incompleto -- e nao e´: e´ o certo.
+  if (tx.tipo === 'transferencia') {
+    return el('td', { class: 'col-categoria', 'data-rotulo': 'Categoria' },
+      el('span', { class: 'tx-tag tx-tag-transferencia' }, '⇄ Transferência'),
+    );
+  }
+
   if (!tx.categoria_id) {
     return el('td', { class: 'col-categoria', 'data-rotulo': 'Categoria' },
       el('span', { class: 'tx-sem-categoria' }, 'Sem categoria'),
@@ -553,21 +562,43 @@ function celulaCategoria(tx) {
   return el('td', { class: 'col-categoria', 'data-rotulo': 'Categoria' }, tag);
 }
 
+/** Uma bolinha da cor da conta + o nome. */
+function marcaConta(nome, cor) {
+  const ponto = el('span', { class: 'tx-conta-ponto', 'aria-hidden': 'true' });
+  ponto.style.setProperty('--cor', cor || '#64748b');
+  return el('span', { class: 'tx-conta' }, ponto, nome);
+}
+
 function celulaConta(tx) {
+  // Uma transferencia tem DUAS contas: mostrar so´ a origem esconderia metade do fato.
+  if (tx.tipo === 'transferencia') {
+    return el('td', { class: 'col-conta', 'data-rotulo': 'Conta' },
+      el('span', { class: 'tx-transferencia-contas' },
+        marcaConta(tx.conta_nome, tx.conta_cor),
+        el('span', { class: 'tx-transferencia-seta', 'aria-label': 'para' }, '→'),
+        marcaConta(tx.conta_destino_nome, tx.conta_destino_cor),
+      ),
+    );
+  }
+
   if (!tx.conta_id) {
     return el('td', { class: 'col-conta', 'data-rotulo': 'Conta' },
       el('span', { class: 'tx-sem-conta' }, '—'),
     );
   }
 
-  const ponto = el('span', { class: 'tx-conta-ponto', 'aria-hidden': 'true' });
-  ponto.style.setProperty('--cor', tx.conta_cor || '#64748b');
-  return el('td', { class: 'col-conta', 'data-rotulo': 'Conta' },
-    el('span', { class: 'tx-conta' }, ponto, tx.conta_nome),
-  );
+  return el('td', { class: 'col-conta', 'data-rotulo': 'Conta' }, marcaConta(tx.conta_nome, tx.conta_cor));
 }
 
 function celulaValor(tx) {
+  // Transferencia nao ganha sinal nem cor: nao entrou nem saiu dinheiro do seu bolso,
+  // so´ mudou de conta. Pintar de verde/vermelho diria que voce ganhou/perdeu algo.
+  if (tx.tipo === 'transferencia') {
+    return el('td', { class: 'col-valor', 'data-rotulo': 'Valor' },
+      el('span', { class: 'tx-valor valor-transferencia' }, fmtMoeda(tx.valor)),
+    );
+  }
+
   const receita = tx.tipo === 'receita';
   const valor = `${receita ? '+' : '-'} ${fmtMoeda(tx.valor)}`;
   return el('td', { class: 'col-valor', 'data-rotulo': 'Valor' },

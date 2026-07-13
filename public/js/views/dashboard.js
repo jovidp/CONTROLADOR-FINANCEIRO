@@ -23,6 +23,9 @@ import { formTransacao, formOrcamento } from '../forms.js';
 
 const COR_ENTRADA = 'var(--in)';
 const COR_SAIDA = 'var(--out)';
+// Hex literal, e nao var(--muted): esta cor entra em `background:${cor}33`, e concatenar
+// o alfa "33" num var() geraria "var(--muted)33", que o CSS descarta em silencio.
+const COR_NEUTRA_HEX = '#94a3b8';
 const CAT_PADRAO = { cor: '#94a3b8', icone: '📦', nome: 'Sem categoria' };
 const FREQUENCIA_ROTULO = {
   diaria: 'Diária',
@@ -562,13 +565,30 @@ function cardUltimas(itens) {
 }
 
 function linhaTransacao(tx) {
+  const transferencia = tx.tipo === 'transferencia';
   const receita = tx.tipo === 'receita';
-  const cor = tx.categoria_cor || CAT_PADRAO.cor;
-  const meta = [
-    fmtDataCurta(tx.data),
-    tx.categoria_nome ?? CAT_PADRAO.nome,
-    tx.conta_nome ?? 'Sem conta',
-  ].join(' · ');
+  const cor = transferencia ? COR_NEUTRA_HEX : tx.categoria_cor || CAT_PADRAO.cor;
+
+  const meta = transferencia
+    ? [fmtDataCurta(tx.data), `${tx.conta_nome} → ${tx.conta_destino_nome}`].join(' · ')
+    : [
+        fmtDataCurta(tx.data),
+        tx.categoria_nome ?? CAT_PADRAO.nome,
+        tx.conta_nome ?? 'Sem conta',
+      ].join(' · ');
+
+  // Sem sinal e sem verde/vermelho: a transferencia nao somou nem subtraiu nada do
+  // seu dinheiro, so´ o moveu de conta. Um "− R$ 300" vermelho aqui seria mentira.
+  const valor = transferencia
+    ? el('span', { class: 'tx-valor' }, fmtMoeda(num(tx.valor)))
+    : el(
+        'span',
+        {
+          class: `tx-valor ${receita ? 'in' : 'out'}`,
+          style: `color:${receita ? COR_ENTRADA : COR_SAIDA}`,
+        },
+        `${receita ? '+' : '−'} ${fmtMoeda(num(tx.valor))}`,
+      );
 
   return el(
     'button',
@@ -581,7 +601,7 @@ function linhaTransacao(tx) {
     el(
       'span',
       { class: 'tx-ico', style: `background:${cor}33;border:1px solid ${cor}` },
-      tx.categoria_icone || CAT_PADRAO.icone,
+      transferencia ? '⇄' : tx.categoria_icone || CAT_PADRAO.icone,
     ),
     el(
       'span',
@@ -589,14 +609,7 @@ function linhaTransacao(tx) {
       el('strong', { class: 'tx-desc' }, tx.descricao),
       el('span', { class: 'tx-meta muted' }, meta),
     ),
-    el(
-      'span',
-      {
-        class: `tx-valor ${receita ? 'in' : 'out'}`,
-        style: `color:${receita ? COR_ENTRADA : COR_SAIDA}`,
-      },
-      `${receita ? '+' : '−'} ${fmtMoeda(num(tx.valor))}`,
-    ),
+    valor,
   );
 }
 

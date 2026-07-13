@@ -422,6 +422,15 @@ const BOM = String.fromCharCode(0xfeff);
 
 const CABECALHO_CSV = ['Data', 'Descrição', 'Tipo', 'Valor', 'Categoria', 'Conta', 'Observação'];
 
+// Mapa explicito em vez de `tipo === 'receita' ? 'Receita' : 'Despesa'`: aquele ternario
+// rotulava QUALQUER coisa que nao fosse receita como "Despesa" -- e uma transferencia
+// sairia mentindo no arquivo exportado.
+const ROTULO_TIPO_CSV = {
+  receita: 'Receita',
+  despesa: 'Despesa',
+  transferencia: 'Transferência',
+};
+
 /**
  * Escapa um campo para CSV pt-BR (separador ';').
  *
@@ -487,11 +496,16 @@ function montarCsv(transacoes) {
       [
         campoCsv(fmtData(tx.data)),
         campoCsv(tx.descricao),
-        campoCsv(tx.tipo === 'receita' ? 'Receita' : 'Despesa'),
+        campoCsv(ROTULO_TIPO_CSV[tx.tipo] ?? tx.tipo),
         // Valor sempre positivo: o sinal está na coluna Tipo (regra do domínio).
         campoCsv(numeroCsv(tx.valor)),
         campoCsv(tx.categoria_nome ?? 'Sem categoria'),
-        campoCsv(tx.conta_nome ?? 'Sem conta'),
+        // Na transferência a conta sozinha esconde metade do fato: vão as duas pontas.
+        campoCsv(
+          tx.tipo === 'transferencia'
+            ? `${tx.conta_nome} -> ${tx.conta_destino_nome}`
+            : tx.conta_nome ?? 'Sem conta',
+        ),
         campoCsv(tx.observacao ?? ''),
       ].join(';'),
     );

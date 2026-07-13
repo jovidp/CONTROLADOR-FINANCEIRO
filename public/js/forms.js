@@ -56,6 +56,7 @@ const ICONE_META_PADRAO = '🏆';
 const TIPOS_TRANSACAO = [
   { valor: 'despesa', rotulo: 'Despesa' },
   { valor: 'receita', rotulo: 'Receita' },
+  { valor: 'transferencia', rotulo: 'Transferência' },
 ];
 
 // Os tipos de conta sao dados do usuario (tabela tipos_conta), e nao uma lista fixa:
@@ -334,6 +335,18 @@ export function formTransacao(tx) {
         placeholder: SEM_CONTA,
         largura: 'meio',
       },
+      // So´ aparece quando o tipo e´ Transferencia (ligarTransferencia cuida disso).
+      // NAO e´ `obrigatorio: true` de proposito: um campo required+escondido faz o
+      // reportValidity() tentar focar um display:none e o formulario trava sem
+      // mostrar erro nenhum. O `required` e´ ligado no DOM so´ quando ele esta´ visivel.
+      {
+        name: 'conta_destino_id',
+        label: 'Para a conta',
+        tipo: 'select',
+        opcoes: opcoesConta(tx?.conta_destino_id),
+        placeholder: 'Escolha o destino',
+        largura: 'meio',
+      },
       {
         name: 'observacao',
         label: 'Observação',
@@ -352,9 +365,41 @@ export function formTransacao(tx) {
       fixar: false,
       categoria_id: paraCampo(tx?.categoria_id),
       conta_id: edicao ? paraCampo(tx.conta_id) : contaPadrao(),
+      conta_destino_id: paraCampo(tx?.conta_destino_id),
       observacao: tx?.observacao ?? '',
     },
     onSubmit: async (v) => {
+      if (v.tipo === 'transferencia') {
+        const origem = idOuNull(v.conta_id);
+        const destino = idOuNull(v.conta_destino_id);
+
+        if (origem === null) throw new ApiError('Escolha a conta de origem.', 400, 'conta_id');
+        if (destino === null) throw new ApiError('Escolha a conta de destino.', 400, 'conta_destino_id');
+        if (origem === destino) {
+          throw new ApiError('A conta de destino precisa ser diferente da de origem.', 400, 'conta_destino_id');
+        }
+
+        const dados = {
+          descricao: v.descricao,
+          valor: moedaObrigatoria(v.valor, 'valor'),
+          tipo: 'transferencia',
+          data: v.data,
+          categoria_id: null, // transferencia nao classifica: o dinheiro continua sendo seu
+          conta_id: origem,
+          conta_destino_id: destino,
+          observacao: textoOuNull(v.observacao),
+        };
+
+        if (edicao) await api.transacoes.atualizar(tx.id, dados);
+        else await api.transacoes.criar(dados);
+
+        await depoisDeSalvar(
+          edicao ? 'Transferência atualizada.' : 'Transferência registrada.',
+          { recarregar: true },
+        );
+        return;
+      }
+
       if (podeParcelar && marcado(v.parcelar)) {
         const vezes = Number(v.total_parcelas);
         if (!Number.isInteger(vezes) || vezes < MIN_PARCELAS || vezes > MAX_PARCELAS) {
@@ -418,7 +463,79 @@ export function formTransacao(tx) {
   });
 
   ligarFiltroCategoria(tipoInicial);
+  ligarTransferencia();
   if (podeParcelar) ligarParcelamento();
+}
+
+/**
+ * Transferencia nao e´ um terceiro "tipo de gasto": e´ outro formulario.
+ * Some a categoria (nao ha´ o que classificar num dinheiro que continua seu), aparece a
+ * conta de destino, e "Conta" vira "Da conta" -- porque agora ela e´ a ORIGEM, nao "a conta".
+ * Parcelar e fixar tambem somem: o backend os recusa para transferencia, e um checkbox que
+ * so´ existe para dar erro no submit e´ pior do que checkbox nenhum.
+ */
+function ligarTransferencia() {
+  aoMontarFormulario((form) => {
+    const grupo = (name) => form.querySelector(`[data-campo="${name}"]`);
+
+    const grupoCategoria = grupo('categoria_id');
+    const grupoDestino = grupo('conta_destino_id');
+    const selectDestino = form.querySelector('select[name="conta_destino_id"]');
+    const selectCategoria = form.querySelector('select[name="categoria_id"]');
+    const rotuloConta = form.querySelector('[data-campo="conta_id"] .campo-label');
+    const selectConta = form.querySelector('select[name="conta_id"]');
+    if (!grupoDestino || !selectDestino) return;
+
+    // Podem nao existir (parcelar/fixar so´ aparecem em criacao/edicao respectivamente).
+    const opcionais = ['parcelar', 'total_parcelas', 'fixar'].map(grupo).filter(Boolean);
+    const checkParcelar = form.querySelector('input[name="parcelar"]');
+    const checkFixar = form.querySelector('input[name="fixar"]');
+
+    const aplicar = () => {
+      const ehTransferencia = lerTipo(form) === 'transferencia';
+
+      grupoDestino.classList.toggle('hidden', !ehTransferencia);
+      grupoCategoria?.classList.toggle('hidden', ehTransferencia);
+
+      // required so´ enquanto visivel: um required escondido trava o submit em silencio.
+      selectDestino.required = ehTransferencia;
+
+      if (ehTransferencia) {
+        // A categoria fica para tras ao trocar o tipo; o backend a zera de qualquer
+        // forma, mas deixar o select preenchido por baixo do campo escondido mentiria.
+        if (selectCategoria) selectCategoria.value = '';
+
+        // A origem passa a ser obrigatoria (fora da transferencia, "Sem conta" e´ valido).
+        if (selectConta) selectConta.required = true;
+
+        for (const g of opcionais) g.classList.add('hidden');
+        if (checkParcelar) checkParcelar.checked = false;
+        if (checkFixar) checkFixar.checked = false;
+
+        // O destino nao pode ser a origem: some da lista o que ja´ esta´ escolhido de la´.
+        for (const opcao of selectDestino.options) {
+          if (!opcao.value) continue;
+          opcao.hidden = selectConta ? opcao.value === selectConta.value : false;
+        }
+        if (selectDestino.value && selectDestino.value === selectConta?.value) selectDestino.value = '';
+      } else {
+        if (selectConta) selectConta.required = false;
+        // 'parcelar' so´ existe na criacao e 'total_parcelas' so´ abre com ele marcado --
+        // devolver os dois visiveis aqui reabriria o "em quantas vezes" sozinho.
+        for (const g of opcionais) {
+          if (g !== grupo('total_parcelas')) g.classList.remove('hidden');
+        }
+      }
+
+      if (rotuloConta) {
+        rotuloConta.textContent = ehTransferencia ? 'Da conta' : 'Conta';
+      }
+    };
+
+    aplicar();
+    form.addEventListener('change', aplicar);
+    form.addEventListener('click', aplicar);
+  });
 }
 
 /**

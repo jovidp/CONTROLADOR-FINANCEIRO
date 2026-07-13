@@ -171,6 +171,28 @@ router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const id = idParam(req.params.id);
+
+    // Uma transacao comum sobrevive a´ conta: ela so´ fica sem conta (ON DELETE SET NULL).
+    // Uma TRANSFERENCIA, nao -- ela e´ definida pelas duas pontas. Perder uma ponta faria
+    // o dinheiro sair de uma conta e nao chegar em lugar nenhum (ou o contrario), e o
+    // saldo da conta que sobrou passaria a mentir. Por isso barramos com uma mensagem em
+    // vez de deixar o banco recusar com erro generico (a FK do destino e´ RESTRICT e o
+    // CHECK da origem estouraria um 23514).
+    const { rows } = await query(
+      `SELECT count(*)::int AS n
+         FROM transacoes
+        WHERE usuario_id = $2
+          AND tipo = 'transferencia'
+          AND (conta_id = $1 OR conta_destino_id = $1)`,
+      [id, req.sessao.id],
+    );
+    if (rows[0].n > 0) {
+      throw conflict(
+        `Esta conta participa de ${rows[0].n} transferência(s). Apague ou edite essas transferências antes, ou arquive a conta.`,
+        'conta_id',
+      );
+    }
+
     // transacoes/recorrentes vinculadas ficam com conta_id NULL (ON DELETE SET NULL).
     const { rowCount } = await query('DELETE FROM contas WHERE id = $1 AND usuario_id = $2', [id, req.sessao.id]);
     if (rowCount === 0) throw notFound('Conta não encontrada.');

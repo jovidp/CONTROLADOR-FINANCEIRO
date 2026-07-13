@@ -328,9 +328,12 @@ router.get(
   '/anos',
   asyncHandler(async (req, res) => {
     const { rows } = await query(
+      // So´ receita/despesa contam como "ano com movimento": um ano em que voce apenas
+      // moveu dinheiro entre as proprias contas nao tem o que relatar -- todo relatorio
+      // desta tela soma receita e despesa, e o ano abriria zerado.
       `SELECT DISTINCT EXTRACT(YEAR FROM data)::int AS ano
        FROM transacoes
-       WHERE usuario_id = $1 AND NOT oculta
+       WHERE usuario_id = $1 AND NOT oculta AND tipo IN ('receita', 'despesa')
        ORDER BY ano DESC`,
       [req.sessao.id],
     );
