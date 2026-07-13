@@ -58,13 +58,14 @@ const TIPOS_TRANSACAO = [
   { valor: 'receita', rotulo: 'Receita' },
 ];
 
-const TIPOS_CONTA = [
-  { valor: 'corrente', rotulo: 'Conta corrente' },
-  { valor: 'poupanca', rotulo: 'Poupança' },
-  { valor: 'carteira', rotulo: 'Carteira' },
-  { valor: 'credito', rotulo: 'Cartão de crédito' },
-  { valor: 'investimento', rotulo: 'Investimento' },
-];
+// Os tipos de conta sao dados do usuario (tabela tipos_conta), e nao uma lista fixa:
+// o select se monta a partir do que ele tem cadastrado na hora de abrir o modal.
+function opcoesTipoConta() {
+  return state.tiposConta.map((t) => ({
+    valor: t.chave,
+    rotulo: `${t.icone ?? ''} ${t.rotulo}`.trim(),
+  }));
+}
 
 const FREQUENCIAS = [
   { valor: 'diaria', rotulo: 'Diária' },
@@ -276,6 +277,23 @@ export function formTransacao(tx) {
       ]
     : [];
 
+  // "Fixo" nao e´ uma etiqueta: e´ ter vindo de um lancamento recorrente (NATUREZA_SQL,
+  // no backend). Por isso marcar aqui CRIA a recorrente. So´ oferecemos para o lancamento
+  // avulso: quem ja´ e´ fixo nao tem o que marcar, e uma parcela nao se repete para sempre.
+  const podeFixar = edicao && !tx.recorrente_id && !tx.parcelamento_id;
+
+  const campoFixar = podeFixar
+    ? [
+        {
+          name: 'fixar',
+          label: 'É um lançamento fixo (repete todo mês)',
+          tipo: 'checkbox',
+          largura: 'cheio',
+          dica: 'Ao salvar, cria um lançamento fixo com estes dados. Os próximos meses passam a ser gerados sozinhos — este aqui continua sendo o deste mês.',
+        },
+      ]
+    : [];
+
   abrirModal({
     titulo: edicao ? 'Editar transação' : 'Nova transação',
     okLabel: edicao ? 'Salvar' : 'Adicionar',
@@ -299,6 +317,7 @@ export function formTransacao(tx) {
       { name: 'valor', label: 'Valor', tipo: 'dinheiro', obrigatorio: true, largura: 'meio' },
       { name: 'data', label: 'Data', tipo: 'data', obrigatorio: true, largura: 'meio' },
       ...camposParcelamento,
+      ...campoFixar,
       {
         name: 'categoria_id',
         label: 'Categoria',
@@ -330,6 +349,7 @@ export function formTransacao(tx) {
       data: tx?.data ?? hoje(),
       parcelar: false,
       total_parcelas: '',
+      fixar: false,
       categoria_id: paraCampo(tx?.categoria_id),
       conta_id: edicao ? paraCampo(tx.conta_id) : contaPadrao(),
       observacao: tx?.observacao ?? '',
@@ -384,10 +404,16 @@ export function formTransacao(tx) {
       if (edicao) await api.transacoes.atualizar(tx.id, dados);
       else await api.transacoes.criar(dados);
 
+      // Fixar DEPOIS de salvar: a recorrente e´ montada a partir da transacao ja´ gravada,
+      // entao ela herda o valor/categoria/conta que voce acabou de editar, e nao os antigos.
+      const fixou = edicao && podeFixar && marcado(v.fixar);
+      if (fixou) await api.transacoes.fixar(tx.id);
+
       // O saldo das contas e o em_uso das categorias derivam das transacoes: o cache envelheceu.
-      await depoisDeSalvar(edicao ? 'Transação atualizada.' : 'Transação adicionada.', {
-        recarregar: true,
-      });
+      const msg = fixou
+        ? 'Transação atualizada e marcada como fixa: os próximos meses serão gerados sozinhos.'
+        : edicao ? 'Transação atualizada.' : 'Transação adicionada.';
+      await depoisDeSalvar(msg, { recarregar: true });
     },
   });
 
@@ -542,7 +568,15 @@ export function formConta(conta) {
       largura: 'cheio',
       placeholder: 'Ex.: Conta do banco',
     },
-    { name: 'tipo', label: 'Tipo', tipo: 'select', opcoes: TIPOS_CONTA, obrigatorio: true, largura: 'meio' },
+    {
+      name: 'tipo',
+      label: 'Tipo',
+      tipo: 'select',
+      opcoes: opcoesTipoConta(),
+      obrigatorio: true,
+      largura: 'meio',
+      dica: 'Gerencie os tipos em Configurações › Tipos de conta.',
+    },
     {
       name: 'saldo_inicial',
       label: 'Saldo inicial',
@@ -570,7 +604,8 @@ export function formConta(conta) {
     campos,
     valores: {
       nome: conta?.nome ?? '',
-      tipo: conta?.tipo ?? 'corrente',
+      // Sem chutar 'corrente': o usuario pode ter renomeado/apagado esse tipo.
+      tipo: conta?.tipo ?? state.tiposConta[0]?.chave ?? '',
       saldo_inicial: conta?.saldo_inicial ?? 0,
       cor: conta?.cor ?? COR_PADRAO,
       arquivada: conta?.arquivada ?? false,
@@ -593,6 +628,62 @@ export function formConta(conta) {
       else await api.contas.criar(dados);
 
       await depoisDeSalvar(edicao ? 'Conta atualizada.' : 'Conta criada.', { recarregar: true });
+    },
+  });
+}
+
+// --- Tipos de conta ---------------------------------------------------
+
+const ICONES_TIPO_CONTA = [
+  '🏦', '🐖', '👛', '💳', '📈', '💰', '💵', '🧾', '🪙', '📊',
+  '🏧', '🎫', '🍽️', '🎁', '📱', '🔒', '🧳', '🏢', '🤝', '📦',
+];
+
+const ICONE_TIPO_CONTA_PADRAO = '🏦';
+
+/**
+ * O nome e´ editavel, mas a CHAVE (derivada do nome na criacao) nunca muda -- e´ ela
+ * que as contas guardam. Por isso renomear e´ seguro: nenhuma conta e´ reescrita.
+ */
+export function formTipoConta(tipo) {
+  const edicao = Boolean(tipo);
+
+  abrirModal({
+    titulo: edicao ? 'Editar tipo de conta' : 'Novo tipo de conta',
+    okLabel: edicao ? 'Salvar' : 'Criar',
+    campos: [
+      {
+        name: 'rotulo',
+        label: 'Nome',
+        tipo: 'texto',
+        obrigatorio: true,
+        largura: 'cheio',
+        placeholder: 'Ex.: Vale-alimentação',
+        dica: edicao && tipo.contas > 0
+          ? `${tipo.contas} conta(s) usam este tipo. Renomear aqui muda o nome em todas elas.`
+          : undefined,
+      },
+      {
+        name: 'icone',
+        label: 'Ícone',
+        tipo: 'icone',
+        opcoes: opcoesIcone(ICONES_TIPO_CONTA),
+        largura: 'cheio',
+      },
+    ],
+    valores: {
+      rotulo: tipo?.rotulo ?? '',
+      icone: tipo?.icone ?? ICONE_TIPO_CONTA_PADRAO,
+    },
+    onSubmit: async (v) => {
+      const dados = { rotulo: v.rotulo, icone: v.icone };
+
+      if (edicao) await api.tiposConta.atualizar(tipo.id, dados);
+      else await api.tiposConta.criar(dados);
+
+      await depoisDeSalvar(edicao ? 'Tipo de conta atualizado.' : 'Tipo de conta criado.', {
+        recarregar: true,
+      });
     },
   });
 }

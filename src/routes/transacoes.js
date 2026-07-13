@@ -3,6 +3,7 @@ import { query, withTransaction } from '../db.js';
 import {
   asyncHandler,
   badRequest,
+  conflict,
   notFound,
   texto,
   dinheiro,
@@ -12,6 +13,7 @@ import {
   idParam,
   mesParaIntervalo,
 } from '../http.js';
+import { FREQUENCIAS, proximaData } from '../services/recorrentes.js';
 
 const router = Router();
 
@@ -351,6 +353,65 @@ router.patch(
         [valor, id, req.sessao.id],
       );
       if (rowCount === 0) throw notFound('Transação não encontrada.');
+      return lerTransacao(client, id, req.sessao.id);
+    });
+
+    res.json(atualizada);
+  }),
+);
+
+/**
+ * POST /api/transacoes/:id/fixar  { frequencia? }
+ *
+ * Transforma um lancamento avulso em FIXO. Como a natureza e´ derivada (fixo = tem
+ * recorrente_id), "marcar como fixa" nao pode ser um flag: e´ criar a recorrente que
+ * a transacao passa a representar e vincular as duas. Feito numa transacao so´ --
+ * uma recorrente orfa geraria lancamentos duplicados todo mes, sem ninguem pedir.
+ *
+ * A recorrente ja´ nasce apontando para a PROXIMA ocorrencia: a desta transacao ja´
+ * existe (e´ ela), e semear proxima_data na data dela faria processarRecorrentes()
+ * lancar uma copia no mesmo dia.
+ */
+router.post(
+  '/:id/fixar',
+  asyncHandler(async (req, res) => {
+    const id = idParam(req.params.id);
+    const frequencia = enumerado(req.body?.frequencia ?? 'mensal', 'frequencia', FREQUENCIAS);
+
+    const atualizada = await withTransaction(async (client) => {
+      const tx = await lerTransacao(client, id, req.sessao.id);
+      if (!tx) throw notFound('Transação não encontrada.');
+
+      if (tx.recorrente_id !== null) {
+        throw conflict('Esta transação já é fixa: ela veio de um lançamento recorrente.', 'fixar');
+      }
+      // Uma parcela nao se repete para sempre -- ela pertence a uma compra que tem fim.
+      if (tx.parcelamento_id !== null) {
+        throw badRequest('Uma parcela de compra parcelada não pode virar despesa fixa.', 'fixar');
+      }
+
+      const { rows } = await client.query(
+        `INSERT INTO recorrentes
+           (usuario_id, descricao, valor, tipo, categoria_id, conta_id, frequencia, proxima_data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id`,
+        [
+          req.sessao.id,
+          tx.descricao,
+          tx.valor,
+          tx.tipo,
+          tx.categoria_id,
+          tx.conta_id,
+          frequencia,
+          proximaData(tx.data, frequencia),
+        ],
+      );
+
+      await client.query(
+        'UPDATE transacoes SET recorrente_id = $1, atualizado_em = now() WHERE id = $2 AND usuario_id = $3',
+        [rows[0].id, id, req.sessao.id],
+      );
+
       return lerTransacao(client, id, req.sessao.id);
     });
 

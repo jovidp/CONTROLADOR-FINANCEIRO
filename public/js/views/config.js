@@ -10,21 +10,12 @@
  */
 
 import { api, ApiError } from '../api.js';
-import { carregarBase, emitir } from '../state.js';
+import { carregarBase, emitir, tipoContaPorChave } from '../state.js';
 import { el, fmtMoeda, hoje, skeleton, vazio, confirmar, toast } from '../ui.js';
-import { formConta } from '../forms.js';
+import { formConta, formTipoConta } from '../forms.js';
 
 const COR_SAIDA = 'var(--out, #ef4444)';
 const COR_PADRAO = '#64748b';
-
-// Espelha o CHECK de contas.tipo em db/migrations/001_init.sql.
-const TIPOS_CONTA = {
-  corrente: { rotulo: 'Conta corrente', ico: '🏦' },
-  poupanca: { rotulo: 'Poupança', ico: '🐖' },
-  carteira: { rotulo: 'Carteira', ico: '👛' },
-  credito: { rotulo: 'Cartão de crédito', ico: '💳' },
-  investimento: { rotulo: 'Investimento', ico: '📈' },
-};
 
 // Padrões do .env (src/config.js). Só entram no comando de pg_dump quando o
 // /api/health não responde — o contrato do health não expõe usuário/host do banco.
@@ -32,8 +23,6 @@ const BANCO_PADRAO = 'controlador_financeiro';
 const USUARIO_PADRAO = 'fin_app';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-
-const tipoConta = (tipo) => TIPOS_CONTA[tipo] ?? { rotulo: tipo || 'Conta', ico: '🏦' };
 
 // =====================================================================
 // Montagem
@@ -46,8 +35,11 @@ export async function montar(container) {
 
   // allSettled: o banco fora do ar não pode apagar a tela inteira — é justamente
   // quando o usuário precisa ver o selo vermelho e os comandos para religar.
-  const [resContas, resHealth] = await Promise.allSettled([
+  const [resContas, resTipos, resHealth] = await Promise.allSettled([
     api.contas.listar({ incluir_arquivadas: true }),
+    // Buscado aqui (e não lido de state.tiposConta) pelo mesmo motivo das contas: só
+    // esta resposta traz quantas contas usam cada tipo, e esse número muda o tempo todo.
+    api.tiposConta.listar(),
     api.health(),
   ]);
 
@@ -56,11 +48,17 @@ export async function montar(container) {
     : null;
   const erroContas = resContas.status === 'rejected' ? resContas.reason : null;
 
+  const tipos = resTipos.status === 'fulfilled' && Array.isArray(resTipos.value)
+    ? resTipos.value
+    : null;
+  const erroTipos = resTipos.status === 'rejected' ? resTipos.reason : null;
+
   const health = resHealth.status === 'fulfilled' ? resHealth.value : null;
   const erroHealth = resHealth.status === 'rejected' ? resHealth.reason : null;
 
   container.replaceChildren(
     secaoContas(container, contas, erroContas),
+    secaoTipos(container, tipos, erroTipos),
     secaoBanco(health, erroHealth),
     secaoSobre(health),
   );
@@ -161,7 +159,7 @@ function cardPatrimonio(ativas) {
 
 function cartaoConta(conta) {
   const cor = conta.cor || COR_PADRAO;
-  const meta = tipoConta(conta.tipo);
+  const meta = tipoContaPorChave(conta.tipo);
   const saldo = num(conta.saldo);
   const negativo = saldo < 0;
 
@@ -171,7 +169,7 @@ function cartaoConta(conta) {
     el(
       'div',
       { class: 'conta-top' },
-      el('span', { class: 'conta-ico', style: { background: `${cor}33` } }, meta.ico),
+      el('span', { class: 'conta-ico', style: { background: `${cor}33` } }, meta.icone),
       el(
         'div',
         { class: 'conta-id' },
@@ -261,7 +259,131 @@ async function excluirConta(conta) {
 }
 
 // =====================================================================
-// 2. Banco de dados
+// 2. Tipos de conta
+// =====================================================================
+
+function secaoTipos(container, tipos, erro) {
+  const secao = el(
+    'section',
+    { class: 'secao' },
+    el(
+      'div',
+      { class: ['card', 'view-head'] },
+      el(
+        'div',
+        { class: 'card-head' },
+        el(
+          'div',
+          {},
+          el('h2', {}, 'Tipos de conta'),
+          el(
+            'p',
+            { class: 'muted' },
+            'Como você classifica suas contas: corrente, poupança, cartão… ou o que fizer sentido para você.',
+          ),
+        ),
+        el('button', { class: 'primary-btn', type: 'button', onclick: () => formTipoConta() }, '+ Novo tipo'),
+      ),
+    ),
+  );
+
+  if (erro) {
+    const card = el('div', { class: 'card' });
+    vazio(card, {
+      ico: '⚠️',
+      msg: erro instanceof ApiError ? erro.message : 'Não consegui carregar os tipos de conta.',
+      acao: { texto: 'Tentar de novo', onClick: () => montar(container) },
+    });
+    secao.appendChild(card);
+    return secao;
+  }
+
+  const lista = tipos ?? [];
+
+  if (!lista.length) {
+    const card = el('div', { class: 'card' });
+    vazio(card, {
+      ico: '🏦',
+      msg: 'Nenhum tipo de conta. Crie ao menos um — toda conta precisa de um tipo.',
+      acao: { texto: '+ Criar um tipo', onClick: () => formTipoConta() },
+    });
+    secao.appendChild(card);
+    return secao;
+  }
+
+  secao.appendChild(el('div', { class: 'tipos-grade' }, lista.map(cartaoTipo)));
+  return secao;
+}
+
+function cartaoTipo(tipo) {
+  const emUso = num(tipo.contas);
+
+  return el(
+    'article',
+    { class: ['card', 'tipo-card'] },
+    el('span', { class: 'tipo-ico' }, tipo.icone),
+    el(
+      'div',
+      { class: 'tipo-id' },
+      el('strong', {}, tipo.rotulo),
+      el('span', { class: 'muted' }, emUso ? `${emUso} conta(s)` : 'nenhuma conta usa'),
+    ),
+    el(
+      'div',
+      { class: 'conta-acoes' },
+      el(
+        'button',
+        {
+          class: 'icon-btn',
+          type: 'button',
+          title: 'Editar tipo',
+          'aria-label': `Editar tipo ${tipo.rotulo}`,
+          onclick: () => formTipoConta(tipo),
+        },
+        '✏️',
+      ),
+      el(
+        'button',
+        {
+          class: 'icon-btn',
+          type: 'button',
+          title: 'Excluir tipo',
+          'aria-label': `Excluir tipo ${tipo.rotulo}`,
+          onclick: () => excluirTipo(tipo),
+        },
+        '🗑️',
+      ),
+    ),
+  );
+}
+
+async function excluirTipo(tipo) {
+  // Tipo em uso o backend recusa (409) -- avisar aqui evita o modal de confirmacao
+  // seguido de um erro, que faria o usuario achar que a exclusao "falhou".
+  if (num(tipo.contas) > 0) {
+    toast(`"${tipo.rotulo}" está em uso por ${tipo.contas} conta(s). Troque o tipo delas antes.`, 'erro');
+    return;
+  }
+
+  const ok = await confirmar({
+    titulo: 'Excluir tipo de conta',
+    msg: `O tipo "${tipo.rotulo}" será excluído. Nenhuma conta usa ele, então nada mais muda.`,
+    okLabel: 'Excluir',
+  });
+  if (!ok) return;
+
+  try {
+    await api.tiposConta.remover(tipo.id);
+    await carregarBase();
+    toast('Tipo de conta excluído.', 'ok');
+    emitir();
+  } catch (err) {
+    toast(err?.message || 'Não foi possível excluir o tipo.', 'erro');
+  }
+}
+
+// =====================================================================
+// 3. Banco de dados
 // =====================================================================
 
 /** "PostgreSQL 18.0 on x86_64..., compiled by gcc" -> "PostgreSQL 18.0" */
@@ -347,7 +469,7 @@ function dado(rotulo, valor) {
 }
 
 // =====================================================================
-// 3. Sobre / comandos
+// 4. Sobre / comandos
 // =====================================================================
 
 const COMANDOS = [

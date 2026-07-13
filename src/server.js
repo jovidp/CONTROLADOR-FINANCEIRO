@@ -11,6 +11,7 @@ import { processarRecorrentes } from './services/recorrentes.js';
 import auth from './routes/auth.js';
 import categorias from './routes/categorias.js';
 import contas from './routes/contas.js';
+import tiposConta from './routes/tiposConta.js';
 import transacoes from './routes/transacoes.js';
 import parcelamentos from './routes/parcelamentos.js';
 import orcamentos from './routes/orcamentos.js';
@@ -70,6 +71,7 @@ app.use('/api', exigirLogin);
 
 app.use('/api/categorias', categorias);
 app.use('/api/contas', contas);
+app.use('/api/tipos-conta', tiposConta);
 app.use('/api/transacoes', transacoes);
 app.use('/api/parcelamentos', parcelamentos);
 app.use('/api/orcamentos', orcamentos);

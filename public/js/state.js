@@ -18,6 +18,7 @@ export const state = {
   mes: mesCorrente(),
   categorias: [],
   contas: [],
+  tiposConta: [],
   carregado: false,
 };
 
@@ -50,17 +51,19 @@ export function setMes(mes) {
   emitir();
 }
 
-/** Busca categorias e contas em paralelo e guarda no state. Lanca ApiError se a API falhar. */
+/** Busca categorias, contas e tipos de conta em paralelo. Lanca ApiError se a API falhar. */
 export async function carregarBase() {
-  const [categorias, contas] = await Promise.all([
+  const [categorias, contas, tiposConta] = await Promise.all([
     api.categorias.listar(),
     // Inclui arquivadas: uma transacao antiga pode apontar para conta arquivada e
     // contaPorId() precisa resolver o nome dela. Os formularios e que filtram.
     api.contas.listar({ incluir_arquivadas: true }),
+    api.tiposConta.listar(),
   ]);
 
   state.categorias = categorias ?? [];
   state.contas = contas ?? [];
+  state.tiposConta = tiposConta ?? [];
   state.carregado = true;
   return state;
 }
@@ -82,6 +85,15 @@ export function contaPorId(id) {
   const alvo = mesmoId(id);
   if (alvo === null) return undefined;
   return state.contas.find((c) => c.id === alvo);
+}
+
+/**
+ * O tipo de uma conta, pela chave que ela guarda. Um tipo apagado no meio de uma
+ * sessao (ou uma conta de outra origem) nao pode deixar o cartao sem rotulo: o
+ * fallback mostra a propria chave em vez de "undefined".
+ */
+export function tipoContaPorChave(chave) {
+  return state.tiposConta.find((t) => t.chave === chave) ?? { chave, rotulo: chave || 'Conta', icone: '🏦' };
 }
 
 export function categoriasPorTipo(tipo) {

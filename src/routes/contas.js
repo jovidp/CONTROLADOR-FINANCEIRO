@@ -6,7 +6,6 @@ import {
   booleano,
   conflict,
   dinheiro,
-  enumerado,
   idParam,
   notFound,
   texto,
@@ -14,10 +13,7 @@ import {
 
 const router = express.Router();
 
-const TIPOS = ['corrente', 'poupanca', 'carteira', 'credito', 'investimento'];
-
-// Espelham os DEFAULT de db/migrations/001_init.sql (nao da para parametrizar DEFAULT no INSERT).
-const TIPO_PADRAO = 'corrente';
+// Espelha o DEFAULT de db/migrations/001_init.sql (nao da para parametrizar DEFAULT no INSERT).
 const COR_PADRAO = '#64748b';
 
 const RE_COR = /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
@@ -29,9 +25,35 @@ function cor(valor) {
   return s;
 }
 
-function tipoOpcional(valor) {
+/**
+ * O tipo nao e´ mais uma lista fixa no codigo: sao os tipos_conta DO USUARIO
+ * (010_tipos_conta.sql). Validamos contra o banco para devolver um 400 com o campo
+ * certo -- deixar a FK estourar daria um 500 sem explicacao.
+ * null = campo ausente, entao o PUT preserva o tipo atual.
+ */
+async function tipoOpcional(cliente, valor, usuarioId) {
   if (valor === undefined || valor === null || valor === '') return null;
-  return enumerado(valor, 'tipo', TIPOS);
+
+  const chave = texto(valor, 'tipo', { max: 40 });
+  const { rowCount } = await cliente.query(
+    'SELECT 1 FROM tipos_conta WHERE usuario_id = $1 AND chave = $2',
+    [usuarioId, chave],
+  );
+  if (!rowCount) throw badRequest('Tipo de conta inválido para este usuário.', 'tipo');
+  return chave;
+}
+
+/** Na criacao, tipo ausente cai no primeiro tipo do usuario (nao da´ para chutar 'corrente': ele pode ter apagado). */
+async function tipoDaCriacao(cliente, valor, usuarioId) {
+  const informado = await tipoOpcional(cliente, valor, usuarioId);
+  if (informado !== null) return informado;
+
+  const { rows } = await cliente.query(
+    'SELECT chave FROM tipos_conta WHERE usuario_id = $1 ORDER BY id LIMIT 1',
+    [usuarioId],
+  );
+  if (!rows[0]) throw badRequest('Crie um tipo de conta antes de criar a conta.', 'tipo');
+  return rows[0].chave;
 }
 
 /**
@@ -86,18 +108,18 @@ router.post(
   asyncHandler(async (req, res) => {
     const body = req.body ?? {};
     const nome = texto(body.nome, 'nome');
-    const tipo = tipoOpcional(body.tipo);
     const saldoInicial = saldoInicialOpcional(body.saldo_inicial);
     const corHex = cor(body.cor);
 
     let conta;
     try {
       conta = await withTransaction(async (cliente) => {
+        const tipo = await tipoDaCriacao(cliente, body.tipo, req.sessao.id);
         const { rows } = await cliente.query(
           `INSERT INTO contas (usuario_id, nome, tipo, saldo_inicial, cor)
-           VALUES ($1, $2, COALESCE($3::text, $6), COALESCE($4::numeric, 0), COALESCE($5::text, $7))
+           VALUES ($1, $2, $3, COALESCE($4::numeric, 0), COALESCE($5::text, $6))
            RETURNING id`,
-          [req.sessao.id, nome, tipo, saldoInicial, corHex, TIPO_PADRAO, COR_PADRAO],
+          [req.sessao.id, nome, tipo, saldoInicial, corHex, COR_PADRAO],
         );
         // Rele da view para devolver a conta ja com receitas/despesas/saldo.
         return buscarPorId(cliente, rows[0].id, req.sessao.id);
@@ -116,7 +138,6 @@ router.put(
     const id = idParam(req.params.id);
     const body = req.body ?? {};
     const nome = texto(body.nome, 'nome');
-    const tipo = tipoOpcional(body.tipo);
     const saldoInicial = saldoInicialOpcional(body.saldo_inicial);
     const corHex = cor(body.cor);
     const arquivada = arquivadaOpcional(body.arquivada);
@@ -124,6 +145,7 @@ router.put(
     let conta;
     try {
       conta = await withTransaction(async (cliente) => {
+        const tipo = await tipoOpcional(cliente, body.tipo, req.sessao.id);
         const { rowCount } = await cliente.query(
           `UPDATE contas
               SET nome          = $2,

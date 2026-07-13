@@ -7,28 +7,40 @@
   <meta name="description" content="Controle financeiro pessoal: transações, orçamentos, metas e relatórios.">
   <title>Controlador Financeiro</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💰</text></svg>">
-  <!-- Caminho absoluto a partir da raiz estatica (public/), mesma convencao do <script> de main.js. -->
-  <link rel="stylesheet" href="/styles.css?v=20260713-3">
+  <link rel="stylesheet" href="/styles.css?v=20260713-5">
 </head>
 <body>
 
 <div id="app" class="app">
-  <!-- Fecha a sidebar no mobile. No desktop o CSS o mantem fora do caminho. -->
+  <!-- Fecha a gaveta no mobile. Acima de 1100px o CSS o remove do caminho. -->
   <div id="backdrop" class="backdrop hidden"></div>
 
   <aside id="sidebar" class="sidebar" aria-label="Navegação principal">
-    <div class="marca brand">
-      <span class="marca-ico brand-logo" aria-hidden="true">💰</span>
-      <span class="marca-nome brand-text"><strong>Controlador Financeiro</strong></span>
+    <div class="brand">
+      <span class="brand-logo" aria-hidden="true">💰</span>
+      <span class="brand-text">
+        <strong>Controlador</strong>
+        <span>Financeiro</span>
+      </span>
     </div>
 
+    <!-- main.js delega o clique via closest('a[data-view]') e itera .nav-item:
+         os rotulos de grupo abaixo sao inertes de proposito. -->
     <nav id="nav" class="nav">
+      <p class="nav-grupo" aria-hidden="true">Visão geral</p>
+
       <a class="nav-item" data-view="dashboard" href="#dashboard">
         <span class="nav-ico" aria-hidden="true">📊</span><span class="nav-txt">Painel</span>
       </a>
       <a class="nav-item" data-view="transacoes" href="#transacoes">
         <span class="nav-ico" aria-hidden="true">💸</span><span class="nav-txt">Transações</span>
       </a>
+      <a class="nav-item" data-view="relatorios" href="#relatorios">
+        <span class="nav-ico" aria-hidden="true">📈</span><span class="nav-txt">Relatórios</span>
+      </a>
+
+      <p class="nav-grupo" aria-hidden="true">Planejamento</p>
+
       <a class="nav-item" data-view="orcamentos" href="#orcamentos">
         <span class="nav-ico" aria-hidden="true">🧮</span><span class="nav-txt">Orçamentos</span>
       </a>
@@ -38,21 +50,24 @@
       <a class="nav-item" data-view="recorrentes" href="#recorrentes">
         <span class="nav-ico" aria-hidden="true">🔁</span><span class="nav-txt">Recorrentes</span>
       </a>
+
+      <p class="nav-grupo" aria-hidden="true">Ajustes</p>
+
       <a class="nav-item" data-view="categorias" href="#categorias">
         <span class="nav-ico" aria-hidden="true">🏷️</span><span class="nav-txt">Categorias</span>
-      </a>
-      <a class="nav-item" data-view="relatorios" href="#relatorios">
-        <span class="nav-ico" aria-hidden="true">📈</span><span class="nav-txt">Relatórios</span>
       </a>
       <a class="nav-item" data-view="config" href="#config">
         <span class="nav-ico" aria-hidden="true">⚙️</span><span class="nav-txt">Configurações</span>
       </a>
     </nav>
 
-    <p class="sidebar-rodape sidebar-foot">Seus dados ficam no PostgreSQL, na sua máquina.</p>
+    <div class="sidebar-foot">
+      <span class="sidebar-ponto" aria-hidden="true"></span>
+      <span>Dados no PostgreSQL, na sua máquina.</span>
+    </div>
   </aside>
 
-  <div class="principal main">
+  <div class="main">
     <header class="topbar">
       <div class="topbar-left">
         <button id="btnMenu" class="icon-btn menu-btn" type="button"
@@ -65,7 +80,7 @@
       </div>
 
       <div class="topbar-right">
-        <div class="mes-seletor month-picker" role="group" aria-label="Mês de referência">
+        <div class="month-picker" role="group" aria-label="Mês de referência">
           <button id="mesAnterior" class="icon-btn" type="button" aria-label="Mês anterior">‹</button>
           <input id="mesInput" class="input mes-input" type="month" aria-label="Mês de referência">
           <button id="mesProximo" class="icon-btn" type="button" aria-label="Próximo mês">›</button>
@@ -75,17 +90,20 @@
           <span aria-hidden="true">+</span> Nova transação
         </button>
 
-        <button id="btnTema" class="icon-btn" type="button" aria-label="Alternar tema">🌙</button>
+        <span class="topbar-sep" aria-hidden="true"></span>
 
+        <!-- main.js sobrescreve o textContent destes dois (🌙/☀️): nada de filhos aqui. -->
+        <button id="btnTema" class="icon-btn" type="button" aria-label="Alternar tema">🌙</button>
         <button id="btnSair" class="icon-btn" type="button" aria-label="Sair" title="Sair">🚪</button>
       </div>
     </header>
 
-    <!-- Cada view monta o proprio DOM aqui dentro. Comeca vazio de proposito. -->
+    <!-- Cada view monta o proprio DOM aqui. main.js faz replaceChildren(): nasce vazio. -->
     <main id="content" class="content"></main>
   </div>
 </div>
 
+<!-- Overlays fora do #app: nenhum ancestral com transform/filter, senao o position:fixed quebra. -->
 <div id="modal" class="overlay modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="modal">
     <header class="modal-head">

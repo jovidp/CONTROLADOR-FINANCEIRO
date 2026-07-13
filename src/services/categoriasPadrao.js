@@ -19,6 +19,27 @@ export const CONTAS_PADRAO = [
   ['Conta Corrente', 'corrente', 0, '#3b82f6'],
 ];
 
+// Os mesmos cinco que a 010_tipos_conta.sql deu a quem ja´ existia. A chave e´ o que
+// contas.tipo guarda; o rotulo e o icone o usuario edita quando quiser.
+export const TIPOS_CONTA_PADRAO = [
+  ['corrente', 'Conta corrente', '🏦'],
+  ['poupanca', 'Poupança', '🐖'],
+  ['carteira', 'Carteira', '👛'],
+  ['credito', 'Cartão de crédito', '💳'],
+  ['investimento', 'Investimento', '📈'],
+];
+
+export async function inserirTiposContaPadrao(cliente, usuarioId) {
+  for (const [chave, rotulo, icone] of TIPOS_CONTA_PADRAO) {
+    await cliente.query(
+      `INSERT INTO tipos_conta (usuario_id, chave, rotulo, icone)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (usuario_id, chave) DO NOTHING`,
+      [usuarioId, chave, rotulo, icone],
+    );
+  }
+}
+
 export async function inserirCategoriasPadrao(cliente, usuarioId) {
   for (const [nome, tipo, cor, icone] of CATEGORIAS_PADRAO) {
     await cliente.query(
@@ -52,11 +73,16 @@ export async function inserirContasPadrao(cliente, usuarioId) {
  */
 export async function garantirPadroes(cliente, usuarioId) {
   const { rows: [n] } = await cliente.query(
-    `SELECT (SELECT count(*) FROM contas     WHERE usuario_id = $1) AS contas,
-            (SELECT count(*) FROM categorias WHERE usuario_id = $1) AS categorias`,
+    `SELECT (SELECT count(*) FROM contas      WHERE usuario_id = $1) AS contas,
+            (SELECT count(*) FROM categorias  WHERE usuario_id = $1) AS categorias,
+            (SELECT count(*) FROM tipos_conta WHERE usuario_id = $1) AS tipos_conta`,
     [usuarioId],
   );
 
   if (Number(n.categorias) === 0) await inserirCategoriasPadrao(cliente, usuarioId);
+
+  // Os tipos vem ANTES das contas: contas.tipo tem FK para tipos_conta, entao a conta
+  // padrao ('corrente') so´ entra se o tipo 'corrente' ja´ existir para este usuario.
+  if (Number(n.tipos_conta) === 0) await inserirTiposContaPadrao(cliente, usuarioId);
   if (Number(n.contas) === 0) await inserirContasPadrao(cliente, usuarioId);
 }

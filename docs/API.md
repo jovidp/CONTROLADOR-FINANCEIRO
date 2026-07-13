@@ -39,6 +39,22 @@ Violar isso devolve `409`. `categoria_id` pode ser `null` ("sem categoria").
 - `PUT /api/contas/:id` body `{ nome, tipo?, saldo_inicial?, cor?, arquivada? }` → `200 → Conta`
 - `DELETE /api/contas/:id` → `204`. Transações vinculadas ficam com `conta_id = null`.
 
+`tipo` é a **chave** de um `/api/tipos-conta` do próprio usuário — não uma lista fixa.
+Chave desconhecida → `400`. Ausente no POST → cai no primeiro tipo do usuário.
+
+## /api/tipos-conta
+Como o usuário classifica suas contas. Cada tipo tem uma `chave` estável (derivada do nome
+na criação, e imutável — é o que `contas.tipo` guarda) e um `rotulo`/`icone` editáveis.
+
+- `GET /api/tipos-conta` → `200 → TipoConta[]` ordenado por rótulo.
+  `TipoConta = { id, chave, rotulo, icone, contas }` (`contas` = quantas contas usam o tipo).
+- `POST /api/tipos-conta` body `{ rotulo, icone? }` → `201 → TipoConta`
+  A chave sai do rótulo ("Vale-Alimentação" → `vale-alimentacao`). Rótulo/chave repetido → `409`.
+  Rótulo sem nenhuma letra ou número (`"###"`) → `400`.
+- `PUT /api/tipos-conta/:id` body `{ rotulo, icone? }` → `200 → TipoConta`
+  Só o rótulo e o ícone mudam. **A chave nunca muda**, então renomear não reescreve conta nenhuma.
+- `DELETE /api/tipos-conta/:id` → `204`. Tipo em uso por alguma conta → `409` (a FK também barra).
+
 ## /api/transacoes
 - `GET /api/transacoes` — query params (todos opcionais):
   `de` (AAAA-MM-DD), `ate`, `mes` (AAAA-MM, atalho que define de/ate), `tipo`, `categoria_id`,
@@ -59,6 +75,11 @@ Violar isso devolve `409`. `categoria_id` pode ser `null` ("sem categoria").
 - `PATCH /api/transacoes/:id/oculta` body `{ oculta: boolean }` → `200 → Transacao`
   Esconder não apaga: a linha fica no banco, mas sai da lista e **de todos os totais**
   (painel, relatórios, orçamentos e saldo das contas). Sempre reversível.
+- `POST /api/transacoes/:id/fixar` body `{ frequencia? }` (default `mensal`) → `200 → Transacao`
+  Transforma um lançamento avulso em **fixo**. Como `natureza` é derivada, isso não é um flag:
+  cria um `/api/recorrentes` com os dados da transação e vincula os dois (numa transação só).
+  A recorrente já nasce apontando para a **próxima** ocorrência — a desta transação é ela mesma.
+  Transação que já é fixa → `409`. Parcela de compra parcelada → `400`.
 - `DELETE /api/transacoes/:id` → `204`
 
 ## /api/parcelamentos

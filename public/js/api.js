@@ -132,6 +132,15 @@ export const api = {
     remover: (idConta) => request('DELETE', `/contas/${id(idConta)}`),
   },
 
+  // Corrente, poupanca, cartao... e o que o usuario criar. A `chave` e´ o que
+  // conta.tipo guarda; o `rotulo` e o `icone` sao a cara dele na tela.
+  tiposConta: {
+    listar: () => request('GET', '/tipos-conta'),
+    criar: (dados) => request('POST', '/tipos-conta', { body: dados }),
+    atualizar: (idTipo, dados) => request('PUT', `/tipos-conta/${id(idTipo)}`, { body: dados }),
+    remover: (idTipo) => request('DELETE', `/tipos-conta/${id(idTipo)}`),
+  },
+
   transacoes: {
     listar: (params) => request('GET', '/transacoes', { params }),
     criar: (dados) => request('POST', '/transacoes', { body: dados }),
@@ -140,6 +149,8 @@ export const api = {
     // Esconder nao apaga: some da lista e dos totais, mas a linha fica no banco.
     ocultar: (idTx, oculta) =>
       request('PATCH', `/transacoes/${id(idTx)}/oculta`, { body: { oculta } }),
+    // Vira despesa fixa: cria a recorrente e vincula esta transacao a ela.
+    fixar: (idTx, dados = {}) => request('POST', `/transacoes/${id(idTx)}/fixar`, { body: dados }),
   },
 
   parcelamentos: {
