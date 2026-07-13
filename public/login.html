@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <title>Entrar · Controlador Financeiro</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💰</text></svg>">
+  <link rel="stylesheet" href="/styles.css?v=20260713-4">
+  <!-- Inline de propósito: aplica o tema ANTES da primeira pintura. Num módulo,
+       a tela piscaria branca antes de escurecer. Mesma chave usada pelo main.js. -->
+  <script>
+    (() => {
+      let tema;
+      try { tema = localStorage.getItem('cf:tema'); } catch { /* storage bloqueado */ }
+      if (tema !== 'claro' && tema !== 'escuro') {
+        tema = matchMedia('(prefers-color-scheme: dark)').matches ? 'escuro' : 'claro';
+      }
+      document.documentElement.dataset.tema = tema;
+    })();
+  </script>
+</head>
+<body class="login-body">
+
+<main class="login-caixa">
+  <div class="login-marca">
+    <span class="login-ico" aria-hidden="true">💰</span>
+    <h1 class="login-titulo">Controlador Financeiro</h1>
+    <p id="loginSub" class="login-sub">Crie seu cadastro para começar.</p>
+  </div>
+
+  <form id="cadastroForm" class="card login-card" novalidate>
+    <div class="campo campo-cheio">
+      <label class="campo-label" for="usuarioCadastro">Usuário</label>
+      <input id="usuarioCadastro" class="input" name="usuario" type="text"
+             autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+      <small class="campo-dica">Use de 3 a 60 caracteres. Espaços simples entre nomes são permitidos.</small>
+    </div>
+
+    <div class="campo campo-cheio">
+      <label class="campo-label" for="senhaCadastro">Senha</label>
+      <input id="senhaCadastro" class="input" name="senha" type="password"
+             autocomplete="new-password" minlength="4" maxlength="60"
+             required>
+      <small class="campo-dica">Use de 4 a 60 caracteres.</small>
+    </div>
+
+    <div class="campo campo-cheio">
+      <label class="campo-label" for="confirmacaoCadastro">Confirmar senha</label>
+      <input id="confirmacaoCadastro" class="input" name="confirmacao" type="password"
+             autocomplete="new-password" minlength="4" maxlength="60" required>
+    </div>
+
+    <p id="cadastroErro" class="campo-erro login-erro hidden" role="alert" aria-live="polite"></p>
+    <button id="btnCadastrar" class="btn btn-primario full" type="submit">Criar cadastro</button>
+    <p class="login-alternativa">Já tem cadastro? <button id="btnIrLogin" class="link-btn" type="button">Entrar</button></p>
+  </form>
+
+  <form id="loginForm" class="card login-card hidden" novalidate>
+    <div class="campo campo-cheio">
+      <label class="campo-label" for="usuario">Usuário</label>
+      <input id="usuario" class="input" name="usuario" type="text"
+             autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    </div>
+
+    <div class="campo campo-cheio">
+      <label class="campo-label" for="senha">Senha</label>
+      <div class="login-senha">
+        <input id="senha" class="input" name="senha" type="password"
+               autocomplete="current-password" required>
+        <button id="btnVer" class="icon-btn login-ver" type="button"
+                aria-label="Mostrar senha" aria-pressed="false" title="Mostrar senha">👁️</button>
+      </div>
+    </div>
+
+    <label class="campo-check login-lembrar">
+      <input id="lembrar" name="lembrar" type="checkbox">
+      <span>Continuar conectado neste computador por 30 dias</span>
+    </label>
+
+    <p id="erro" class="campo-erro login-erro hidden" role="alert" aria-live="polite"></p>
+    <p id="sucesso" class="login-sucesso hidden" role="status" aria-live="polite"></p>
+
+    <button id="btnEntrar" class="btn btn-primario full" type="submit">Entrar</button>
+    <p class="login-alternativa">Primeiro acesso? <button id="btnIrCadastro" class="link-btn" type="button">Criar cadastro</button></p>
+  </form>
+
+  <p class="login-rodape">Seus dados ficam no PostgreSQL, nesta máquina.</p>
+</main>
+
+<script type="module" src="/js/login.js?v=20260713-4"></script>
+</body>
+</html>

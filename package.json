@@ -1,0 +1,27 @@
+{
+  "name": "controlador-financeiro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Controle financeiro pessoal com PostgreSQL, API REST em Node/Express e frontend sem build step.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "senha": "node src/scripts/senha.js",
+    "db:create": "node src/scripts/create-db.js",
+    "db:migrate": "node src/scripts/migrate.js",
+    "db:seed": "node src/scripts/seed.js",
+    "db:limpar": "node src/scripts/limpar.js",
+    "db:reset": "node src/scripts/reset.js",
+    "setup": "npm run db:create && npm run db:migrate",
+    "smoke": "node src/scripts/smoke.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Controle financeiro pessoal: transações, orçamentos, metas e relatórios.">
+  <title>Controlador Financeiro</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💰</text></svg>">
+  <!-- Caminho absoluto a partir da raiz estatica (public/), mesma convencao do <script> de main.js. -->
+  <link rel="stylesheet" href="/styles.css?v=20260713-3">
+</head>
+<body>
+
+<div id="app" class="app">
+  <!-- Fecha a sidebar no mobile. No desktop o CSS o mantem fora do caminho. -->
+  <div id="backdrop" class="backdrop hidden"></div>
+
+  <aside id="sidebar" class="sidebar" aria-label="Navegação principal">
+    <div class="marca brand">
+      <span class="marca-ico brand-logo" aria-hidden="true">💰</span>
+      <span class="marca-nome brand-text"><strong>Controlador Financeiro</strong></span>
+    </div>
+
+    <nav id="nav" class="nav">
+      <a class="nav-item" data-view="dashboard" href="#dashboard">
+        <span class="nav-ico" aria-hidden="true">📊</span><span class="nav-txt">Painel</span>
+      </a>
+      <a class="nav-item" data-view="transacoes" href="#transacoes">
+        <span class="nav-ico" aria-hidden="true">💸</span><span class="nav-txt">Transações</span>
+      </a>
+      <a class="nav-item" data-view="orcamentos" href="#orcamentos">
+        <span class="nav-ico" aria-hidden="true">🧮</span><span class="nav-txt">Orçamentos</span>
+      </a>
+      <a class="nav-item" data-view="metas" href="#metas">
+        <span class="nav-ico" aria-hidden="true">🏆</span><span class="nav-txt">Metas</span>
+      </a>
+      <a class="nav-item" data-view="recorrentes" href="#recorrentes">
+        <span class="nav-ico" aria-hidden="true">🔁</span><span class="nav-txt">Recorrentes</span>
+      </a>
+      <a class="nav-item" data-view="categorias" href="#categorias">
+        <span class="nav-ico" aria-hidden="true">🏷️</span><span class="nav-txt">Categorias</span>
+      </a>
+      <a class="nav-item" data-view="relatorios" href="#relatorios">
+        <span class="nav-ico" aria-hidden="true">📈</span><span class="nav-txt">Relatórios</span>
+      </a>
+      <a class="nav-item" data-view="config" href="#config">
+        <span class="nav-ico" aria-hidden="true">⚙️</span><span class="nav-txt">Configurações</span>
+      </a>
+    </nav>
+
+    <p class="sidebar-rodape sidebar-foot">Seus dados ficam no PostgreSQL, na sua máquina.</p>
+  </aside>
+
+  <div class="principal main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="btnMenu" class="icon-btn menu-btn" type="button"
+                aria-label="Abrir menu" aria-controls="sidebar" aria-expanded="false">☰</button>
+
+        <div class="topbar-titulo">
+          <h1 id="viewTitulo" class="view-titulo">Painel</h1>
+          <p id="viewSub" class="view-sub"></p>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="mes-seletor month-picker" role="group" aria-label="Mês de referência">
+          <button id="mesAnterior" class="icon-btn" type="button" aria-label="Mês anterior">‹</button>
+          <input id="mesInput" class="input mes-input" type="month" aria-label="Mês de referência">
+          <button id="mesProximo" class="icon-btn" type="button" aria-label="Próximo mês">›</button>
+        </div>
+
+        <button id="btnNova" class="btn btn-primario btn-nova" type="button">
+          <span aria-hidden="true">+</span> Nova transação
+        </button>
+
+        <button id="btnTema" class="icon-btn" type="button" aria-label="Alternar tema">🌙</button>
+
+        <button id="btnSair" class="icon-btn" type="button" aria-label="Sair" title="Sair">🚪</button>
+      </div>
+    </header>
+
+    <!-- Cada view monta o proprio DOM aqui dentro. Comeca vazio de proposito. -->
+    <main id="content" class="content"></main>
+  </div>
+</div>
+
+<div id="modal" class="overlay modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal">
+    <header class="modal-head">
+      <h2 id="modalTitle" class="modal-titulo"></h2>
+      <button id="modalClose" class="icon-btn" type="button" aria-label="Fechar">✕</button>
+    </header>
+
+    <div class="modal-corpo modal-body">
+      <form id="modalForm" class="form-grid"></form>
+    </div>
+
+    <footer class="modal-foot">
+      <button id="modalCancel" class="btn" type="button">Cancelar</button>
+      <!-- Fora do <form> de proposito: ui.js faz form.replaceChildren() ao abrir o
+           modal e apagaria o botao. O atributo form= mantem o submit funcionando. -->
+      <button id="modalSave" class="btn btn-primario" type="submit" form="modalForm">Salvar</button>
+    </footer>
+  </div>
+</div>
+
+<div id="confirm" class="overlay modal-overlay hidden" role="alertdialog" aria-modal="true"
+     aria-labelledby="confirmTitle" aria-describedby="confirmMsg">
+  <div class="modal modal-confirm">
+    <header class="modal-head">
+      <h2 id="confirmTitle" class="modal-titulo">Confirmar</h2>
+    </header>
+
+    <div class="modal-corpo modal-body">
+      <p id="confirmMsg" class="confirm-msg"></p>
+    </div>
+
+    <footer class="modal-foot">
+      <button id="confirmNo" class="btn" type="button">Cancelar</button>
+      <button id="confirmYes" class="btn btn-perigo" type="button">Confirmar</button>
+    </footer>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" role="region" aria-label="Notificações"></div>
+
+<script type="module" src="/js/main.js?v=20260713-4"></script>
+</body>
+</html>
