@@ -18,14 +18,20 @@
     "db:limpar": "node src/scripts/limpar.js",
     "db:reset": "node src/scripts/reset.js",
     "setup": "npm run db:create && npm run db:migrate",
+    "test": "node --test test/*.test.js",
     "smoke": "node src/scripts/smoke.js",
     "manutencao": "node src/scripts/manutencao.js",
     "manutencao:on": "node src/scripts/manutencao.js on",
-    "manutencao:off": "node src/scripts/manutencao.js off"
+    "manutencao:off": "node src/scripts/manutencao.js off",
+    "lint": "eslint ."
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5",
+    "globals": "^17.7.0"
   }
 }

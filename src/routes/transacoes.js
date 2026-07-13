@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query, withTransaction } from '../db.js';
+import { withTransaction } from '../db.js';
 import {
   asyncHandler,
   badRequest,

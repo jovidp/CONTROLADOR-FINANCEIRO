@@ -13,6 +13,7 @@ import { api, ApiError } from '../api.js';
 import { tipoContaPorChave } from '../state.js';
 import { el, fmtMoeda, hoje, skeleton, vazio, toast } from '../ui.js';
 import { excluirCom, formConta, formTipoConta } from '../forms.js';
+import { num } from '../dominio.js';
 
 const COR_SAIDA = 'var(--out, #ef4444)';
 const COR_PADRAO = '#64748b';
@@ -21,8 +22,6 @@ const COR_PADRAO = '#64748b';
 // /api/health não responde — o contrato do health não expõe usuário/host do banco.
 const BANCO_PADRAO = 'controlador_financeiro';
 const USUARIO_PADRAO = 'fin_app';
-
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 // =====================================================================
 // Montagem

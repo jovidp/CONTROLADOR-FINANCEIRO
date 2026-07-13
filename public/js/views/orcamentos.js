@@ -17,33 +17,7 @@ import {
   skeleton,
   vazio,
 } from '../ui.js';
-
-// Cores por status. Vem das variaveis do tema (o fallback mantem a barra legivel
-// caso o CSS ainda nao tenha definido a variavel).
-const COR_STATUS = {
-  ok: 'var(--in, #22c55e)',
-  atencao: 'var(--warn, #f59e0b)',
-  estourado: 'var(--out, #ef4444)',
-};
-
-const ROTULO_STATUS = {
-  ok: 'No controle',
-  atencao: 'Atenção',
-  estourado: 'Estourado',
-};
-
-const status = (o) => (COR_STATUS[o?.status] ? o.status : 'ok');
-
-const num = (n) => (Number.isFinite(Number(n)) ? Number(n) : 0);
-
-/** Cor de fundo suave a partir da cor da categoria (so para hex #rrggbb). */
-function corSuave(cor) {
-  return /^#[0-9a-f]{6}$/i.test(String(cor ?? '')) ? `${cor}22` : 'transparent';
-}
-
-function plural(n, singular, pluralPalavra) {
-  return `${n} ${n === 1 ? singular : pluralPalavra}`;
-}
+import { COR_STATUS, ROTULO_STATUS, corSuave, num, plural, statusDe } from '../dominio.js';
 
 // =====================================================================
 // Montagem
@@ -211,7 +185,7 @@ function barra(percentual, situacao) {
 }
 
 function cartao(orc, todos) {
-  const situacao = status(orc);
+  const situacao = statusDe(orc);
   const restante = num(orc.restante);
   const estourou = restante < 0;
 

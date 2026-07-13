@@ -20,19 +20,13 @@ import { state } from '../state.js';
 import { el, fmtMoeda, fmtDataCurta, fmtPct, hoje, skeleton, vazio } from '../ui.js';
 import { barrasAgrupadas, donut } from '../charts.js';
 import { formTransacao, formOrcamento } from '../forms.js';
+import { CAT_PADRAO, COR_STATUS, FREQUENCIA_ROTULO, num, statusDe } from '../dominio.js';
 
 const COR_ENTRADA = 'var(--in)';
 const COR_SAIDA = 'var(--out)';
 // Hex literal, e nao var(--muted): esta cor entra em `background:${cor}33`, e concatenar
 // o alfa "33" num var() geraria "var(--muted)33", que o CSS descarta em silencio.
 const COR_NEUTRA_HEX = '#94a3b8';
-const CAT_PADRAO = { cor: '#94a3b8', icone: '📦', nome: 'Sem categoria' };
-const FREQUENCIA_ROTULO = {
-  diaria: 'Diária',
-  semanal: 'Semanal',
-  mensal: 'Mensal',
-  anual: 'Anual',
-};
 
 /** Uma casa decimal, pt-BR. Usado nos pontos percentuais da taxa de economia. */
 const NUM1 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -42,8 +36,6 @@ const NUM1 = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumF
  * a resposta velha chega depois e nao pode sobrescrever a tela nova.
  */
 let execucao = 0;
-
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /** 'AAAA-MM' -> mes anterior. UTC so para a aritmetica de calendario, nunca para "hoje". */
 function mesAnterior(mes) {
@@ -447,12 +439,6 @@ function linhaAlerta(alerta) {
 // 5. Orcamentos do mes
 // =====================================================================
 
-const COR_STATUS = {
-  ok: 'var(--ok, #22c55e)',
-  atencao: 'var(--warn, #f59e0b)',
-  estourado: 'var(--out, #ef4444)',
-};
-
 function cardOrcamentos(orcs) {
   const corpo = el('div', { class: 'budget-list' });
 
@@ -487,7 +473,7 @@ function cardOrcamentos(orcs) {
 
 function linhaOrcamento(o) {
   const pct = num(o.percentual);
-  const status = COR_STATUS[o.status] ? o.status : 'ok';
+  const status = statusDe(o);
   const largura = Math.max(0, Math.min(100, pct)); // percentual pode passar de 100; a barra nao.
   const restante = num(o.restante);
 

@@ -15,15 +15,7 @@ import { api, ApiError } from '../api.js';
 import { carregarBase, emitir } from '../state.js';
 import { el, fmtMoeda, fmtData, hoje, toast, skeleton, vazio } from '../ui.js';
 import { excluirCom, formRecorrente } from '../forms.js';
-
-const FREQUENCIA_ROTULO = {
-  diaria: 'Diária',
-  semanal: 'Semanal',
-  mensal: 'Mensal',
-  anual: 'Anual',
-};
-
-const CAT_PADRAO = { cor: '#94a3b8', icone: '📦', nome: 'Sem categoria' };
+import { CAT_PADRAO, FREQUENCIA_ROTULO, num } from '../dominio.js';
 
 const COR_ENTRADA = 'var(--in, #22c55e)';
 const COR_SAIDA = 'var(--out, #ef4444)';
@@ -31,8 +23,6 @@ const COR_ALERTA = 'var(--warn, #f59e0b)';
 
 /** Descarta resposta antiga que chegou depois de uma remontagem. */
 let execucao = 0;
-
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 // =====================================================================
 // Montagem

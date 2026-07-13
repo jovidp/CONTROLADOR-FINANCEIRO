@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Lint e testes unitarios: nao tocam no banco, entao rodam em segundos.
+  # Se o Postgres do job de baixo estiver fora do ar, ainda queremos ESTE sinal.
+  lint-e-testes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  # As migrations e o smoke sao o unico jeito de saber se as constraints REALMENTE
+  # garantem o que dizem garantir (isolamento entre usuarios, dinheiro que bate,
+  # transferencia que nao vaza como receita). Isso nao se testa com mock: precisa de
+  # um PostgreSQL de verdade.
+  banco:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: fin_app
+          POSTGRES_PASSWORD: senha_ci
+          POSTGRES_DB: controlador_financeiro
+        ports: ['5432:5432']
+        # Sem o healthcheck, o job comeca a migrar antes de o Postgres aceitar conexao.
+        options: >-
+          --health-cmd "pg_isready -U fin_app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: controlador_financeiro
+      PGUSER: fin_app
+      PGPASSWORD: senha_ci
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Aplicar as migrations
+        run: npm run db:migrate
+
+      # Dois usuários: o smoke só exercita o isolamento entre pessoas se houver mais
+      # de uma no banco. Com um só, esses testes viram SKIP.
+      - name: Criar os usuários de teste
+        run: node .github/scripts/criar-usuario-ci.js
+
+      - name: Smoke (integridade contra o banco real)
+        run: npm run smoke
+
+      - name: As migrations são idempotentes (rodar de novo é no-op)
+        run: npm run db:migrate

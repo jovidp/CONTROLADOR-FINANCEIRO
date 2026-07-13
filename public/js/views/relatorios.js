@@ -23,12 +23,10 @@ import {
   toast,
 } from '../ui.js';
 import { barrasEmpilhadas } from '../charts.js';
+import { CAT_PADRAO, num } from '../dominio.js';
 
 const COR_ENTRADA = 'var(--in, #22c55e)';
 const COR_SAIDA = 'var(--out, #ef4444)';
-const CAT_PADRAO = { cor: '#94a3b8', icone: '📦' };
-
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
 /** Ano do mês selecionado na topbar ('AAAA-MM' -> number). */
 const anoDoMes = (mes) => Number(String(mes ?? '').slice(0, 4));

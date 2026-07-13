@@ -18,21 +18,19 @@ import {
   skeleton,
   vazio,
 } from '../ui.js';
+import { corSuave, num } from '../dominio.js';
 
 const COR_OK = 'var(--in, #22c55e)';
 const COR_ATRASO = 'var(--out, #ef4444)';
 
-const num = (n) => (Number.isFinite(Number(n)) ? Number(n) : 0);
-
 const MS_DIA = 86_400_000;
 
-/** Cor de fundo suave a partir da cor da meta (so para hex #rrggbb). */
-function corSuave(cor) {
-  return /^#[0-9a-f]{6}$/i.test(String(cor ?? '')) ? `${cor}22` : 'transparent';
-}
-
+/**
+ * Cor SOLIDA da barra de progresso -- nao confundir com corSuave(), que devolve fundo
+ * com alfa. Sem hex valido, a barra nao pode desaparecer: cai na cor da marca.
+ */
 function corMeta(cor) {
-  return /^#[0-9a-f]{6}$/i.test(String(cor ?? '')) ? cor : 'var(--acc, #6366f1)';
+  return /^#[0-9a-f]{6}$/i.test(String(cor ?? '')) ? cor : 'var(--brand, #6366f1)';
 }
 
 function emUTC(iso) {

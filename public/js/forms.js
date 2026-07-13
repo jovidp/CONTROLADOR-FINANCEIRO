@@ -8,7 +8,7 @@
  */
 
 import { api, ApiError } from './api.js';
-import { abrirModal, confirmar, el, fmtMoeda, hoje, toast } from './ui.js';
+import { abrirModal, confirmar, fmtMoeda, hoje, toast } from './ui.js';
 import { carregarBase, categoriasPorTipo, emitir, state } from './state.js';
 
 // --- Constantes de apresentacao --------------------------------------
@@ -149,96 +149,6 @@ function contaPadrao() {
   return conta ? String(conta.id) : '';
 }
 
-// --- Interacao dentro do modal ---------------------------------------
-//
-// abrirModal() nao expoe hook de "campo mudou". O unico ponto de extensao documentado
-// e o form montado em #modalForm, entao a ligacao tipo -> categoria e feita no DOM.
-// Tudo aqui degrada em silencio: se a marcacao do ui.js mudar, o filtro deixa de ligar,
-// mas o formulario continua enviavel (o banco barra par tipo/categoria incompativel).
-
-const SELETOR_FORM = '#modalForm';
-
-function aoMontarFormulario(fn, tentativas = 3) {
-  const form = document.querySelector(SELETOR_FORM);
-  if (form) {
-    fn(form);
-    return;
-  }
-  if (tentativas > 0) requestAnimationFrame(() => aoMontarFormulario(fn, tentativas - 1));
-}
-
-/** Le o tipo selecionado sem assumir como o ui.js desenha o 'segmentado'. */
-function lerTipo(form) {
-  const escolhido = form.querySelector('[name="tipo"]:checked');
-  if (escolhido) return escolhido.value;
-
-  const campo = form.elements?.tipo;
-  if (campo instanceof HTMLInputElement || campo instanceof HTMLSelectElement) return campo.value;
-
-  const pressionado = form.querySelector(
-    '[name="tipo"][aria-pressed="true"], [data-campo="tipo"] [aria-pressed="true"], ' +
-    '[data-campo="tipo"] [aria-checked="true"]',
-  );
-  if (pressionado) return pressionado.value || pressionado.dataset.valor || '';
-
-  return typeof campo?.value === 'string' ? campo.value : '';
-}
-
-function preencherCategorias(select, tipo) {
-  const selecionado = select.value;
-  // replaceChildren() varre tambem o <option> vazio que o ui.js desenhou: refazemos.
-  const opcoes = [{ valor: '', rotulo: SEM_CATEGORIA }, ...opcoesCategoria(tipo)];
-
-  select.replaceChildren();
-  for (const opcao of opcoes) {
-    const option = document.createElement('option');
-    option.value = opcao.valor;
-    option.textContent = opcao.rotulo;
-    if (opcao.cor) option.dataset.cor = opcao.cor;
-    select.appendChild(option);
-  }
-
-  // Categoria do tipo antigo nao existe mais na lista: volta para "Sem categoria".
-  select.value = opcoes.some((o) => o.valor === selecionado) ? selecionado : '';
-}
-
-/** Trocar o tipo refiltra a lista de categorias na hora. */
-function ligarFiltroCategoria(tipoInicial) {
-  aoMontarFormulario((form) => {
-    const select = form.querySelector('select[name="categoria_id"]');
-    if (!select) return;
-
-    // O controle segmentado nao possui um input[name="tipo"] tradicional. O
-    // valor inicial deve ser lido do botao realmente marcado no DOM, porque o
-    // tipo recebido pela view pode estar desatualizado (principalmente ao
-    // editar uma recorrencia). Sem esta sincronizacao o select podia ficar
-    // apenas com "Sem categoria".
-    let tipoAtual = lerTipo(form) || tipoInicial;
-    preencherCategorias(select, tipoAtual);
-
-    const sincronizar = () => {
-      const tipo = lerTipo(form);
-      if (tipo !== 'receita' && tipo !== 'despesa') return;
-      if (tipo === tipoAtual) return;
-      tipoAtual = tipo;
-      preencherCategorias(select, tipo);
-    };
-
-    // 'change' cobre radio/select; 'click' cobre botoes do segmentado.
-    form.addEventListener('change', sincronizar);
-    form.addEventListener('click', sincronizar);
-  });
-}
-
-/** 'desabilitado' nao esta no contrato de campo, entao tambem desligamos no DOM. */
-function desabilitarCampo(name) {
-  aoMontarFormulario((form) => {
-    for (const alvo of form.querySelectorAll(`[name="${name}"]`)) alvo.disabled = true;
-    const grupo = form.querySelector(`[data-campo="${name}"]`);
-    if (grupo) for (const alvo of grupo.querySelectorAll('button, input, select')) alvo.disabled = true;
-  });
-}
-
 /** Salvou: atualiza o cache se preciso, avisa as views e confirma para o usuario. */
 async function depoisDeSalvar(msg, { recarregar = false } = {}) {
   if (recarregar) {
@@ -258,6 +168,35 @@ async function depoisDeSalvar(msg, { recarregar = false } = {}) {
 const MIN_PARCELAS = 2;
 const MAX_PARCELAS = 120;
 
+/**
+ * Transferencia nao e´ um terceiro "tipo de gasto": e´ outro formulario. A categoria some
+ * (nao ha´ o que classificar num dinheiro que continua seu -- e o backend RECUSA
+ * transferencia com categoria_id, entao o campo tem que sumir de verdade: campo invisivel
+ * vale null no submit, e´ isso que o ui.js garante), a conta de destino aparece, e "Conta"
+ * vira "Da conta" -- porque agora ela e´ a ORIGEM, nao "a conta". Parcelar e fixar tambem
+ * somem: o backend os recusa, e checkbox que so´ existe para dar erro no submit e´ pior do
+ * que checkbox nenhum.
+ */
+const ehTransferencia = (v) => v.tipo === 'transferencia';
+
+/**
+ * Descreve a divisao EXATAMENTE como o backend vai grava´-la, para o usuario conferir ANTES
+ * de gravar 10 lancamentos no banco.
+ */
+function previaParcelas(total, vezes) {
+  const n = Number(vezes);
+  if (!Number.isInteger(n) || n < MIN_PARCELAS || n > MAX_PARCELAS) {
+    return `Escolha entre ${MIN_PARCELAS} e ${MAX_PARCELAS} parcelas.`;
+  }
+
+  const bruto = Number(total);
+  if (!Number.isFinite(bruto) || bruto <= 0) {
+    return 'Informe o valor total da compra para ver o valor de cada parcela.';
+  }
+
+  return `${descreverDivisao(bruto, n)} · total ${fmtMoeda(bruto)}`;
+}
+
 export function formTransacao(tx) {
   const edicao = Boolean(tx);
   const tipoInicial = tx?.tipo ?? 'despesa';
@@ -266,6 +205,40 @@ export function formTransacao(tx) {
   // especifica -- transformar ela em compra nova aqui so´ geraria confusao.
   const podeParcelar = !edicao;
 
+  // "Fixo" nao e´ uma etiqueta: e´ ter vindo de um lancamento recorrente (NATUREZA_SQL,
+  // no backend). Por isso marcar aqui CRIA a recorrente. So´ oferecemos para o lancamento
+  // avulso: quem ja´ e´ fixo nao tem o que marcar, e uma parcela nao se repete para sempre.
+  const podeFixar = edicao && !tx.recorrente_id && !tx.parcelamento_id;
+
+  const parcelando = (v) => podeParcelar && !ehTransferencia(v) && marcado(v.parcelar);
+
+  // Tudo o que um campo faz com OUTRO campo. Registrado como onChange dos campos que
+  // importam, entao vive e morre com o modal -- nada e´ pendurado no #modalForm, que e´ no
+  // permanente do index.html e ficaria com o handler preso depois que o modal fechasse.
+  const aoMudar = (_, campos) => {
+    const v = campos.valores();
+
+    campos.rotulo('conta_id', ehTransferencia(v) ? 'Da conta' : 'Conta');
+    // O total que voce digita nao e´ a parcela: e´ a compra inteira.
+    campos.rotulo('valor', parcelando(v) ? 'Valor total da compra' : 'Valor');
+
+    if (ehTransferencia(v)) {
+      // O destino nao pode ser a origem: ela sai da lista (e a selecao cai fora se era ela).
+      campos.repovoar(
+        'conta_destino_id',
+        opcoesConta(tx?.conta_destino_id).filter((o) => o.valor !== paraCampo(v.conta_id)),
+      );
+    } else {
+      // Categoria pertence ao par (tipo, id) -- a FK e´ composta. Trocar Despesa <-> Receita
+      // troca a lista inteira. Na transferencia nao repovoamos: categoriasPorTipo() so´ filtra
+      // receita/despesa e devolveria TODAS as categorias para 'transferencia' -- justo no campo
+      // que nem esta´ na tela.
+      campos.repovoar('categoria_id', opcoesCategoria(v.tipo));
+    }
+
+    campos.dica('total_parcelas', parcelando(v) ? previaParcelas(v.valor, v.total_parcelas) : '');
+  };
+
   const camposParcelamento = podeParcelar
     ? [
         {
@@ -273,6 +246,14 @@ export function formTransacao(tx) {
           label: 'Parcelar esta compra',
           tipo: 'checkbox',
           largura: 'cheio',
+          visivel: (v) => !ehTransferencia(v),
+          onChange: (ligado, campos) => {
+            // Semente: abrir o campo vazio faria a previa ja´ nascer reclamando. So´ aqui --
+            // no aoMudar geral, isso repreencheria o campo a cada tecla e o usuario nunca
+            // conseguiria apagar o "2" para digitar outro numero.
+            if (ligado && !campos.valores().total_parcelas) campos.set('total_parcelas', MIN_PARCELAS);
+            aoMudar(ligado, campos);
+          },
         },
         {
           name: 'total_parcelas',
@@ -282,14 +263,12 @@ export function formTransacao(tx) {
           min: String(MIN_PARCELAS),
           max: String(MAX_PARCELAS),
           placeholder: '12',
+          dicaClasse: 'parcela-previa',
+          visivel: parcelando,
+          onChange: aoMudar,
         },
       ]
     : [];
-
-  // "Fixo" nao e´ uma etiqueta: e´ ter vindo de um lancamento recorrente (NATUREZA_SQL,
-  // no backend). Por isso marcar aqui CRIA a recorrente. So´ oferecemos para o lancamento
-  // avulso: quem ja´ e´ fixo nao tem o que marcar, e uma parcela nao se repete para sempre.
-  const podeFixar = edicao && !tx.recorrente_id && !tx.parcelamento_id;
 
   const campoFixar = podeFixar
     ? [
@@ -298,6 +277,7 @@ export function formTransacao(tx) {
           label: 'É um lançamento fixo (repete todo mês)',
           tipo: 'checkbox',
           largura: 'cheio',
+          visivel: (v) => !ehTransferencia(v),
           dica: 'Ao salvar, cria um lançamento fixo com estes dados. Os próximos meses passam a ser gerados sozinhos — este aqui continua sendo o deste mês.',
         },
       ]
@@ -314,6 +294,7 @@ export function formTransacao(tx) {
         opcoes: TIPOS_LANCAMENTO,
         obrigatorio: true,
         largura: 'cheio',
+        onChange: aoMudar,
       },
       {
         name: 'descricao',
@@ -323,7 +304,14 @@ export function formTransacao(tx) {
         largura: 'cheio',
         placeholder: 'Ex.: Mercado do mês',
       },
-      { name: 'valor', label: 'Valor', tipo: 'dinheiro', obrigatorio: true, largura: 'meio' },
+      {
+        name: 'valor',
+        label: 'Valor',
+        tipo: 'dinheiro',
+        obrigatorio: true,
+        largura: 'meio',
+        onChange: aoMudar, // o rotulo e a previa das parcelas dependem dele
+      },
       { name: 'data', label: 'Data', tipo: 'data', obrigatorio: true, largura: 'meio' },
       ...camposParcelamento,
       ...campoFixar,
@@ -334,6 +322,7 @@ export function formTransacao(tx) {
         opcoes: opcoesCategoria(tipoInicial),
         placeholder: SEM_CATEGORIA,
         largura: 'meio',
+        visivel: (v) => !ehTransferencia(v),
       },
       {
         name: 'conta_id',
@@ -342,11 +331,11 @@ export function formTransacao(tx) {
         opcoes: opcoesConta(tx?.conta_id),
         placeholder: SEM_CONTA,
         largura: 'meio',
+        // Fora da transferencia, "Sem conta" e´ uma escolha valida; na transferencia ela e´
+        // a origem do dinheiro, e sem origem nao ha´ o que transferir.
+        obrigatorio: ehTransferencia,
+        onChange: aoMudar, // a origem some da lista de destinos
       },
-      // So´ aparece quando o tipo e´ Transferencia (ligarTransferencia cuida disso).
-      // NAO e´ `obrigatorio: true` de proposito: um campo required+escondido faz o
-      // reportValidity() tentar focar um display:none e o formulario trava sem
-      // mostrar erro nenhum. O `required` e´ ligado no DOM so´ quando ele esta´ visivel.
       {
         name: 'conta_destino_id',
         label: 'Para a conta',
@@ -354,6 +343,8 @@ export function formTransacao(tx) {
         opcoes: opcoesConta(tx?.conta_destino_id),
         placeholder: 'Escolha o destino',
         largura: 'meio',
+        visivel: ehTransferencia,
+        obrigatorio: ehTransferencia,
       },
       {
         name: 'observacao',
@@ -469,130 +460,6 @@ export function formTransacao(tx) {
       await depoisDeSalvar(msg, { recarregar: true });
     },
   });
-
-  ligarFiltroCategoria(tipoInicial);
-  ligarTransferencia();
-  if (podeParcelar) ligarParcelamento();
-}
-
-/**
- * Transferencia nao e´ um terceiro "tipo de gasto": e´ outro formulario.
- * Some a categoria (nao ha´ o que classificar num dinheiro que continua seu), aparece a
- * conta de destino, e "Conta" vira "Da conta" -- porque agora ela e´ a ORIGEM, nao "a conta".
- * Parcelar e fixar tambem somem: o backend os recusa para transferencia, e um checkbox que
- * so´ existe para dar erro no submit e´ pior do que checkbox nenhum.
- */
-function ligarTransferencia() {
-  aoMontarFormulario((form) => {
-    const grupo = (name) => form.querySelector(`[data-campo="${name}"]`);
-
-    const grupoCategoria = grupo('categoria_id');
-    const grupoDestino = grupo('conta_destino_id');
-    const selectDestino = form.querySelector('select[name="conta_destino_id"]');
-    const selectCategoria = form.querySelector('select[name="categoria_id"]');
-    const rotuloConta = form.querySelector('[data-campo="conta_id"] .campo-label');
-    const selectConta = form.querySelector('select[name="conta_id"]');
-    if (!grupoDestino || !selectDestino) return;
-
-    // Podem nao existir (parcelar/fixar so´ aparecem em criacao/edicao respectivamente).
-    const opcionais = ['parcelar', 'total_parcelas', 'fixar'].map(grupo).filter(Boolean);
-    const checkParcelar = form.querySelector('input[name="parcelar"]');
-    const checkFixar = form.querySelector('input[name="fixar"]');
-
-    const aplicar = () => {
-      const ehTransferencia = lerTipo(form) === 'transferencia';
-
-      grupoDestino.classList.toggle('hidden', !ehTransferencia);
-      grupoCategoria?.classList.toggle('hidden', ehTransferencia);
-
-      // required so´ enquanto visivel: um required escondido trava o submit em silencio.
-      selectDestino.required = ehTransferencia;
-
-      if (ehTransferencia) {
-        // A categoria fica para tras ao trocar o tipo; o backend a zera de qualquer
-        // forma, mas deixar o select preenchido por baixo do campo escondido mentiria.
-        if (selectCategoria) selectCategoria.value = '';
-
-        // A origem passa a ser obrigatoria (fora da transferencia, "Sem conta" e´ valido).
-        if (selectConta) selectConta.required = true;
-
-        for (const g of opcionais) g.classList.add('hidden');
-        if (checkParcelar) checkParcelar.checked = false;
-        if (checkFixar) checkFixar.checked = false;
-
-        // O destino nao pode ser a origem: some da lista o que ja´ esta´ escolhido de la´.
-        for (const opcao of selectDestino.options) {
-          if (!opcao.value) continue;
-          opcao.hidden = selectConta ? opcao.value === selectConta.value : false;
-        }
-        if (selectDestino.value && selectDestino.value === selectConta?.value) selectDestino.value = '';
-      } else {
-        if (selectConta) selectConta.required = false;
-        // 'parcelar' so´ existe na criacao e 'total_parcelas' so´ abre com ele marcado --
-        // devolver os dois visiveis aqui reabriria o "em quantas vezes" sozinho.
-        for (const g of opcionais) {
-          if (g !== grupo('total_parcelas')) g.classList.remove('hidden');
-        }
-      }
-
-      if (rotuloConta) {
-        rotuloConta.textContent = ehTransferencia ? 'Da conta' : 'Conta';
-      }
-    };
-
-    aplicar();
-    form.addEventListener('change', aplicar);
-    form.addEventListener('click', aplicar);
-  });
-}
-
-/**
- * O campo "em quantas vezes" so´ aparece com o parcelar ligado, e o rotulo do valor
- * vira "Valor total da compra" -- porque e´ o total que voce digita, nao a parcela.
- * A previa ("10x de R$ 400,00") existe para o usuario conferir a divisao ANTES de
- * gravar 10 lancamentos no banco.
- */
-function ligarParcelamento() {
-  aoMontarFormulario((form) => {
-    const check = form.querySelector('input[name="parcelar"]');
-    const grupoVezes = form.querySelector('[data-campo="total_parcelas"]');
-    const inputVezes = form.querySelector('input[name="total_parcelas"]');
-    const inputValor = form.querySelector('input[name="valor"]');
-    const rotuloValor = form.querySelector('[data-campo="valor"] .campo-label');
-    if (!check || !grupoVezes || !inputVezes || !inputValor) return;
-
-    const previa = el('small', { class: 'campo-dica parcela-previa' });
-    grupoVezes.appendChild(previa);
-
-    const atualizarPrevia = () => {
-      const vezes = Number(inputVezes.value);
-      const total = Number(inputValor.value);
-
-      if (!Number.isInteger(vezes) || vezes < MIN_PARCELAS || vezes > MAX_PARCELAS) {
-        previa.textContent = `Escolha entre ${MIN_PARCELAS} e ${MAX_PARCELAS} parcelas.`;
-      } else if (!Number.isFinite(total) || total <= 0) {
-        previa.textContent = 'Informe o valor total da compra para ver o valor de cada parcela.';
-      } else {
-        previa.textContent = `${descreverDivisao(total, vezes)} · total ${fmtMoeda(total)}`;
-      }
-    };
-
-    const sincronizar = () => {
-      const ligado = check.checked;
-      grupoVezes.classList.toggle('hidden', !ligado);
-      // O ' *' de campo obrigatorio e´ um <span> irmao: trocar so´ o nó de texto o preserva.
-      if (rotuloValor?.firstChild) {
-        rotuloValor.firstChild.textContent = ligado ? 'Valor total da compra' : 'Valor';
-      }
-      if (ligado && !inputVezes.value) inputVezes.value = '2';
-      if (ligado) atualizarPrevia();
-    };
-
-    check.addEventListener('change', sincronizar);
-    inputVezes.addEventListener('input', atualizarPrevia);
-    inputValor.addEventListener('input', atualizarPrevia);
-    sincronizar();
-  });
 }
 
 /**
@@ -638,7 +505,7 @@ export function formCategoria(cat) {
         opcoes: TIPOS_RECEITA_DESPESA,
         obrigatorio: true,
         largura: 'cheio',
-        desabilitado: tipoTravado,
+        disabled: tipoTravado,
         dica: tipoTravado
           ? 'O tipo não pode ser alterado: já existem lançamentos usando esta categoria.'
           : undefined,
@@ -675,8 +542,6 @@ export function formCategoria(cat) {
       });
     },
   });
-
-  if (tipoTravado) desabilitarCampo('tipo');
 }
 
 // --- Contas -----------------------------------------------------------
@@ -1025,6 +890,10 @@ export function formRecorrente(rec) {
         opcoes: TIPOS_RECEITA_DESPESA,
         obrigatorio: true,
         largura: 'cheio',
+        // O tipo que a view mandou pode estar velho (e ja´ ficou): o onChange dispara na
+        // abertura com o valor que o controle REALMENTE tem, entao a lista sai certa aqui
+        // e continua certa a cada troca.
+        onChange: (tipo, campos) => campos.repovoar('categoria_id', opcoesCategoria(tipo)),
       },
       {
         name: 'descricao',
@@ -1112,8 +981,6 @@ export function formRecorrente(rec) {
       await depoisDeSalvar(edicao ? 'Lançamento fixo atualizado.' : 'Lançamento fixo criado.');
     },
   });
-
-  ligarFiltroCategoria(tipoInicial);
 }
 
 // --- Exclusao com confirmacao ----------------------------------------

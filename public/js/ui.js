@@ -331,14 +331,44 @@ function refsModal() {
   };
 }
 
+/** Regra de campo: `true`, `false` ou `(valores) => bool` reavaliada a cada mudanca. */
+function avaliar(regra, valores, padrao) {
+  if (typeof regra === 'function') return Boolean(regra(valores));
+  if (regra === null || regra === undefined) return padrao;
+  return Boolean(regra);
+}
+
 /**
  * abrirModal({ titulo, campos, valores, onSubmit, okLabel }) -> Promise<boolean>
  * Resolve true se onSubmit rodou sem erro (modal fechou salvando), false se o
  * usuario cancelou/fechou.
  *
- * Campo: { name, label, tipo, opcoes?, obrigatorio?, step?, min?, max?,
- *          placeholder?, dica?, largura?, onChange? }
+ * Campo: { name, label, tipo, opcoes?, obrigatorio?, visivel?, disabled?, step?, min?,
+ *          max?, placeholder?, dica?, dicaClasse?, rows?, largura?, onChange? }
  * largura: 'meio' | 'cheio' (default 'cheio') — grid de 2 colunas.
+ *
+ * obrigatorio / visivel / disabled aceitam bool OU (valores) => bool, reavaliado depois
+ * de QUALQUER mudanca no formulario. E aqui que mora "categoria some quando o tipo e
+ * transferencia": no proprio campo, declarado. Nao existe versao imperativa disso no
+ * handle de proposito — duas fontes de verdade para "este campo esta visivel?" e como o
+ * formulario volta a divergir de si mesmo.
+ *
+ * onChange(valor, campos) — para o que NAO cabe num predicado (repovoar um select,
+ * trocar um rotulo, escrever uma previa). campos = handle do formulario inteiro:
+ *   valores()               -> { nome: valor } como os controles estao AGORA
+ *   set(nome, v)            -> escreve num campo sem disparar onChange (nao ha eco)
+ *   repovoar(nome, opcoes)  -> troca as <option> de um select, preservando a selecao se ela sobreviver
+ *   rotulo(nome, texto)     -> troca so o texto do <label> (o ' *' de obrigatorio e um irmao e fica)
+ *   dica(nome, texto)       -> escreve/limpa a linha de dica embaixo do campo
+ *
+ * onChange dispara TAMBEM uma vez na abertura, com o valor inicial do campo: e o que faz o
+ * formulario nascer coerente (categoria ja filtrada pelo tipo, destino da transferencia ja
+ * visivel na edicao) sem um passo de "ajeitar" DEPOIS do abrirModal — que era exatamente de
+ * onde vinham os listeners presos no #modalForm.
+ *
+ * No submit, campo invisivel vale null. Nao e cosmetico: o backend recusa transferencia COM
+ * categoria_id, e um <select> escondido continua tendo valor — o formulario precisa ESQUECER
+ * o campo, nao so parar de desenha-lo.
  */
 export function abrirModal({ titulo = '', campos = [], valores = {}, onSubmit, okLabel = 'Salvar' } = {}) {
   const ref = refsModal();
@@ -361,17 +391,69 @@ export function abrirModal({ titulo = '', campos = [], valores = {}, onSubmit, o
   const alerta = el('div', { class: ['form-alerta', 'campo-cheio', 'hidden'], role: 'alert' });
   form.appendChild(alerta);
 
-  const controles = new Map(); // name -> { ler, erro, limparErro, focar }
+  const usados = campos.filter((c) => c && c.name);
+  const controles = new Map(); // name -> controle montado por montarCampo()
 
-  for (const campo of campos) {
-    if (!campo || !campo.name) continue;
-    const c = montarCampo(campo, valores?.[campo.name], form, controles);
-    if (c) form.appendChild(c);
+  const lerTudo = () => {
+    const v = {};
+    for (const [nome, ctrl] of controles) v[nome] = ctrl.ler();
+    return v;
+  };
+
+  const handle = {
+    valores: lerTudo,
+    set: (nome, valor) => controles.get(nome)?.escrever(valor),
+    repovoar: (nome, opcoes) => controles.get(nome)?.repovoar(opcoes),
+    rotulo: (nome, texto) => controles.get(nome)?.rotulo(texto),
+    dica: (nome, texto) => controles.get(nome)?.dica(texto),
+  };
+
+  function sincronizar() {
+    const v = lerTudo();
+    for (const campo of usados) {
+      const ctrl = controles.get(campo.name);
+      if (!ctrl) continue;
+
+      const visivel = avaliar(campo.visivel, v, true);
+      ctrl.mostrar(visivel);
+
+      // required SO enquanto visivel: um required em display:none faz o reportValidity()
+      // tentar focar o que nao da para focar — o submit morre em silencio e o Chrome so
+      // resmunga "not focusable" no console.
+      ctrl.exigir(visivel && avaliar(campo.obrigatorio, v, false));
+
+      // Escondido tambem vai desabilitado: campo desabilitado e barrado da validacao
+      // nativa, entao um "12 vezes" fora da faixa nao trava o submit depois que o
+      // usuario desmarcou o parcelamento e nem ve mais o campo.
+      ctrl.desabilitar(!visivel || avaliar(campo.disabled, v, false));
+    }
+  }
+
+  // Todo evento de campo entra por aqui: avisa quem pediu e reavalia o formulario inteiro.
+  const notificar = (campo, valor) => {
+    campo.onChange?.(valor, handle);
+    sincronizar();
+  };
+
+  for (const campo of usados) {
+    form.appendChild(montarCampo(campo, valores?.[campo.name], controles, notificar));
+  }
+
+  sincronizar();
+  for (const campo of usados) {
+    if (typeof campo.onChange === 'function') notificar(campo, controles.get(campo.name)?.ler());
   }
 
   return new Promise((resolve) => {
     let finalizado = false;
     let salvando = false;
+
+    // Um unico abort() derruba tudo que este modal pendurou nos nos PERMANENTES do
+    // index.html (#modal, #modalForm, document). Sem ele, cada listener novo tinha que ser
+    // lembrado no fechar() na mao — e quem esquecia deixava handler vivo para sempre,
+    // rodando a cada clique sobre um DOM que o modal seguinte ja tinha substituido.
+    const parar = new AbortController();
+    const { signal } = parar;
 
     const noEsc = (ev) => {
       if (ev.key === 'Escape' && !salvando) {
@@ -392,11 +474,7 @@ export function abrirModal({ titulo = '', campos = [], valores = {}, onSubmit, o
     function fechar(salvou) {
       if (finalizado) return;
       finalizado = true;
-      form.removeEventListener('submit', enviar);
-      overlay.removeEventListener('click', noOverlay);
-      document.removeEventListener('keydown', noEsc, true);
-      ref.fechar?.removeEventListener('click', cancelar);
-      ref.cancelar?.removeEventListener('click', cancelar);
+      parar.abort();
       overlay.classList.add('hidden');
       form.replaceChildren();
       modalAberto = null;
@@ -415,7 +493,7 @@ export function abrirModal({ titulo = '', campos = [], valores = {}, onSubmit, o
       for (const ctrl of controles.values()) ctrl.limparErro();
 
       const dados = {};
-      for (const [nome, ctrl] of controles) dados[nome] = ctrl.ler();
+      for (const [nome, ctrl] of controles) dados[nome] = ctrl.visivel() ? ctrl.ler() : null;
 
       if (typeof onSubmit !== 'function') {
         fechar(true);
@@ -433,7 +511,7 @@ export function abrirModal({ titulo = '', campos = [], valores = {}, onSubmit, o
         // ApiError (duck typing: nao importamos api.js para nao acoplar ui->api).
         const msg = err?.message || 'Não foi possível salvar. Tente de novo.';
         const alvo = err?.campo && controles.get(err.campo);
-        if (alvo) {
+        if (alvo && alvo.visivel()) {
           alvo.erro(msg);
           alvo.focar();
         } else {
@@ -464,19 +542,25 @@ export function abrirModal({ titulo = '', campos = [], valores = {}, onSubmit, o
       alerta.classList.add('hidden');
     }
 
-    form.addEventListener('submit', enviar);
-    overlay.addEventListener('click', noOverlay);
-    document.addEventListener('keydown', noEsc, true);
-    ref.fechar?.addEventListener('click', cancelar);
-    ref.cancelar?.addEventListener('click', cancelar);
+    form.addEventListener('submit', enviar, { signal });
+    overlay.addEventListener('click', noOverlay, { signal });
+    document.addEventListener('keydown', noEsc, { capture: true, signal });
+    ref.fechar?.addEventListener('click', cancelar, { signal });
+    ref.cancelar?.addEventListener('click', cancelar, { signal });
 
     modalAberto = { fechar };
     travarBotoes(false, okLabel);
     overlay.classList.remove('hidden');
 
-    // Foco no primeiro controle interativo do formulario.
-    const primeiro = form.querySelector('input:not([type="hidden"]), select, textarea, .seg-btn, .paleta-cor, .icone-btn');
-    primeiro?.focus();
+    // Foco no primeiro campo que o usuario realmente ve (o primeiro pode estar escondido
+    // por predicado — a conta de destino fora da transferencia, por exemplo).
+    for (const campo of usados) {
+      const ctrl = controles.get(campo.name);
+      if (ctrl?.visivel()) {
+        ctrl.focar();
+        break;
+      }
+    }
   });
 }
 
@@ -500,20 +584,27 @@ export function fecharConfirmacao() {
 
 // --- construcao de cada campo ----------------------------------------
 
-function montarCampo(campo, valorInicial, form, controles) {
+function montarCampo(campo, valorInicial, controles, notificar) {
   const tipo = TIPOS_CAMPO.has(campo.tipo) ? campo.tipo : 'texto';
   const largura = campo.largura === 'meio' ? 'campo-meio' : 'campo-cheio';
-  // data-campo identifica o grupo inteiro (label + controle + erro). Sem ele so´
-  // da´ para alcancar o <input>, e quem precisa esconder ou desabilitar o campo
-  // todo (parcelamento, desabilitarCampo) nao tem como.
   const wrap = el('div', { class: ['campo', largura], 'data-campo': campo.name });
   const id = `campo-${campo.name}`;
 
   const erroBox = el('small', { class: ['campo-erro', 'hidden'] });
-  const dicaBox = campo.dica ? el('small', { class: 'campo-dica' }, campo.dica) : null;
 
-  let ler;
-  let focar;
+  // A dica existe sempre, mesmo vazia: e o alvo do dica() do handle (a previa do
+  // parcelamento escreve nela). Vazia ela some — senao o margin-top da .parcela-previa
+  // abriria um buraco embaixo de todo campo que nao tem dica nenhuma.
+  const dicaBox = el('small', { class: ['campo-dica', campo.dicaClasse || null, 'hidden'] });
+
+  const definirDica = (texto) => {
+    const s = String(texto ?? '');
+    dicaBox.textContent = s;
+    dicaBox.classList.toggle('hidden', s === '');
+  };
+
+  let feito;
+  let visivel = true;
   let controlePrincipal = null;
 
   const marcarErro = (msg) => {
@@ -530,54 +621,127 @@ function montarCampo(campo, valorInicial, form, controles) {
     controlePrincipal?.removeAttribute('aria-invalid');
   };
 
+  // Unico caminho de saida de um evento de campo: limpa o erro e devolve o valor ao modal,
+  // que chama o onChange e reavalia os predicados. Todo listener nasce e morre com o form.
+  const aoEditar = (valor) => {
+    limparErro();
+    // undefined = o controle nao sabe dizer o valor no evento (input de texto/numero,
+    // cujo 'input' dispara a cada tecla): perguntamos a ele.
+    notificar(campo, valor === undefined ? feito?.ler() : valor);
+  };
+
+  const rotuloTexto = document.createTextNode(campo.label || campo.name);
+
   if (tipo === 'checkbox') {
     const input = el('input', {
       type: 'checkbox',
       id,
       name: campo.name,
       checked: Boolean(valorInicial),
-      onchange: () => campo.onChange?.(input.checked),
+      onchange: () => aoEditar(input.checked),
     });
     controlePrincipal = input;
-    wrap.appendChild(el('label', { class: 'campo-check', for: id }, input, el('span', {}, campo.label || campo.name)));
-    ler = () => input.checked;
-    focar = () => input.focus();
-  } else {
-    wrap.appendChild(
-      el('label', { class: 'campo-label', for: id },
-        campo.label || campo.name,
-        campo.obrigatorio ? el('span', { class: 'campo-obrig', 'aria-hidden': 'true' }, ' *') : null),
-    );
+    wrap.appendChild(el('label', { class: 'campo-check', for: id }, input, el('span', {}, rotuloTexto)));
 
-    const feito = montarControle(tipo, campo, valorInicial, id, limparErro);
+    feito = {
+      ler: () => input.checked,
+      foco: input,
+      escrever: (v) => { input.checked = Boolean(v); },
+      exigir: () => {}, // "obrigatorio" num checkbox seria "tem que marcar"; ninguem pede isso
+      desabilitar: (v) => { input.disabled = v; },
+      repovoar: () => {},
+    };
+  } else {
+    // O ' *' nasce escondido e quem o acende e o exigir(): o obrigatorio pode depender de
+    // outro campo (a conta de origem so e obrigatoria na transferencia).
+    const marcaObrig = el('span', { class: ['campo-obrig', 'hidden'], 'aria-hidden': 'true' }, ' *');
+    wrap.appendChild(el('label', { class: 'campo-label', for: id }, rotuloTexto, marcaObrig));
+
+    feito = montarControle(tipo, campo, valorInicial, id, aoEditar);
     controlePrincipal = feito.foco;
     wrap.appendChild(feito.node);
-    ler = feito.ler;
-    focar = () => feito.foco?.focus();
+    feito.marcaObrig = marcaObrig;
   }
 
-  if (dicaBox) wrap.appendChild(dicaBox);
+  wrap.appendChild(dicaBox);
   wrap.appendChild(erroBox);
+  definirDica(campo.dica);
 
-  controles.set(campo.name, { ler, erro: marcarErro, limparErro, focar });
+  controles.set(campo.name, {
+    ler: () => feito.ler(),
+    escrever: (v) => feito.escrever(v),
+    repovoar: (opcoes) => feito.repovoar(opcoes),
+    erro: marcarErro,
+    limparErro,
+    focar: () => feito.foco?.focus(),
+    rotulo: (t) => { rotuloTexto.textContent = String(t ?? ''); },
+    dica: definirDica,
+    visivel: () => visivel,
+    mostrar: (v) => {
+      visivel = Boolean(v);
+      wrap.classList.toggle('hidden', !visivel);
+    },
+    exigir: (v) => {
+      feito.marcaObrig?.classList.toggle('hidden', !v);
+      feito.exigir(Boolean(v));
+    },
+    desabilitar: (v) => feito.desabilitar(Boolean(v)),
+  });
+
   return wrap;
 }
 
-/** Devolve { node, ler, foco } para cada tipo de controle. */
+/**
+ * Devolve { node, foco, ler, escrever, repovoar, exigir, desabilitar } para cada tipo.
+ * `required` NAO e definido aqui: quem manda nele e o sincronizar() do abrirModal, que
+ * sabe se o campo esta visivel e se o predicado de obrigatorio deu true agora.
+ */
 function montarControle(tipo, campo, valorInicial, id, aoEditar) {
   const comum = {
     id,
     name: campo.name,
-    required: Boolean(campo.obrigatorio),
     placeholder: campo.placeholder ?? null,
-    oninput: () => {
-      aoEditar();
-      campo.onChange?.(undefined);
-    },
+    oninput: () => aoEditar(undefined),
   };
 
   const texto = (v) => (v === null || v === undefined ? '' : String(v));
   const vazioOuNulo = (v) => (String(v).trim() === '' ? null : String(v).trim());
+
+  /** Entrada de texto/numero/data/textarea: todas reagem igual a escrever/exigir/desabilitar. */
+  const entrada = (node, ler) => ({
+    node,
+    foco: node,
+    ler,
+    escrever: (v) => { node.value = texto(v); },
+    exigir: (v) => { node.required = v; },
+    desabilitar: (v) => { node.disabled = v; },
+    repovoar: () => {},
+  });
+
+  /** Grupos de botao (cor/icone/segmentado): a selecao vive em JS, o DOM so reflete. */
+  const grupoBotoes = (node, botoes, chave, obterAtual, definirAtual) => {
+    const pintar = () => {
+      const atual = obterAtual();
+      for (const b of botoes) {
+        const marcado = b.dataset[chave] === atual;
+        b.classList.toggle('ativo', marcado);
+        b.setAttribute('aria-checked', String(marcado));
+      }
+    };
+    for (const b of botoes) node.appendChild(b);
+    pintar();
+    return {
+      node,
+      foco: botoes[0],
+      pintar,
+      escrever: (v) => {
+        if (definirAtual(texto(v))) pintar();
+      },
+      exigir: () => {}, // sempre tem um selecionado: nao ha estado invalido para o navegador barrar
+      desabilitar: (v) => { for (const b of botoes) b.disabled = v; },
+      repovoar: () => {},
+    };
+  };
 
   switch (tipo) {
     case 'numero':
@@ -593,11 +757,7 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
         max: campo.max ?? null,
         value: texto(valorInicial),
       });
-      return {
-        node: input,
-        foco: input,
-        ler: () => (input.value.trim() === '' ? null : Number(input.value)),
-      };
+      return entrada(input, () => (input.value.trim() === '' ? null : Number(input.value)));
     }
 
     case 'data':
@@ -608,7 +768,7 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
         type: tipo === 'data' ? 'date' : 'month',
         value: texto(valorInicial),
       });
-      return { node: input, foco: input, ler: () => vazioOuNulo(input.value) };
+      return entrada(input, () => vazioOuNulo(input.value));
     }
 
     case 'textarea': {
@@ -618,35 +778,60 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
         rows: campo.rows ?? 3,
       }, texto(valorInicial));
       area.value = texto(valorInicial);
-      return { node: area, foco: area, ler: () => vazioOuNulo(area.value) };
+      return entrada(area, () => vazioOuNulo(area.value));
     }
 
     case 'select': {
-      const opcoes = Array.isArray(campo.opcoes) ? campo.opcoes : [];
-      // Mantem o tipo original do valor (numero de categoria_id continua numero).
-      const porChave = new Map(opcoes.map((o) => [String(o.valor), o.valor]));
+      // Mantem o tipo original do valor (numero de categoria_id continua numero). O Map e
+      // MUTAVEL de proposito: o repovoar() troca o conteudo dele, e o ler() ja fecha em cima.
+      const porChave = new Map();
+
+      // O <option> vazio aparece quando o campo NAO e obrigatorio-sempre. Com predicado
+      // (a conta de destino so vale na transferencia) ele tem que existir: fora da
+      // transferencia o usuario precisa poder estar em "nenhuma".
+      const temVazio = campo.obrigatorio !== true;
+
       const select = el('select', {
         id,
         name: campo.name,
         class: 'input',
-        required: Boolean(campo.obrigatorio),
-        onchange: () => {
-          aoEditar();
-          campo.onChange?.(porChave.has(select.value) ? porChave.get(select.value) : null);
-        },
-      },
-      campo.obrigatorio ? null : el('option', { value: '' }, campo.placeholder || '— nenhuma —'),
-      opcoes.map((o) => el('option', { value: String(o.valor) },
-        o.icone ? `${o.icone} ${o.rotulo}` : o.rotulo)),
-      );
+        onchange: () => aoEditar(porChave.has(select.value) ? porChave.get(select.value) : null),
+      });
 
-      const inicial = valorInicial === null || valorInicial === undefined ? '' : String(valorInicial);
+      const repovoar = (opcoes) => {
+        const lista = Array.isArray(opcoes) ? opcoes : [];
+        const antes = select.value;
+        const filhos = temVazio
+          ? [el('option', { value: '' }, campo.placeholder || '— nenhuma —')]
+          : [];
+
+        porChave.clear();
+        for (const o of lista) {
+          porChave.set(String(o.valor), o.valor);
+          filhos.push(el('option', { value: String(o.valor) }, o.icone ? `${o.icone} ${o.rotulo}` : o.rotulo));
+        }
+        select.replaceChildren(...filhos);
+
+        // A lista nova pode nao ter mais o que estava escolhido (a categoria era de despesa
+        // e o tipo virou receita): a selecao cai fora em vez de virar um id incompativel.
+        select.value = porChave.has(antes) ? antes : '';
+      };
+
+      repovoar(campo.opcoes);
+      const inicial = texto(valorInicial);
       select.value = porChave.has(inicial) ? inicial : '';
 
       return {
         node: select,
         foco: select,
+        repovoar,
         ler: () => (porChave.has(select.value) ? porChave.get(select.value) : null),
+        escrever: (v) => {
+          const s = texto(v);
+          select.value = porChave.has(s) ? s : '';
+        },
+        exigir: (v) => { select.required = v; },
+        desabilitar: (v) => { select.disabled = v; },
       };
     }
 
@@ -664,25 +849,20 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
           style: { background: cor },
           title: cor,
           role: 'radio',
-          'aria-checked': String(cor === atual),
           dataset: { cor },
           onclick: () => {
             atual = cor;
-            for (const b of botoes) {
-              const marcado = b.dataset.cor === atual;
-              b.classList.toggle('ativo', marcado);
-              b.setAttribute('aria-checked', String(marcado));
-            }
-            aoEditar();
-            campo.onChange?.(atual);
+            grupo.pintar();
+            aoEditar(atual);
           },
         }));
 
-      for (const b of botoes) {
-        if (b.dataset.cor === atual) b.classList.add('ativo');
-        paleta.appendChild(b);
-      }
-      return { node: paleta, foco: botoes[0], ler: () => atual };
+      const grupo = grupoBotoes(paleta, botoes, 'cor', () => atual, (v) => {
+        if (!cores.includes(v)) return false;
+        atual = v;
+        return true;
+      });
+      return { ...grupo, ler: () => atual };
     }
 
     case 'icone': {
@@ -697,25 +877,20 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
           type: 'button',
           class: 'icone-btn',
           role: 'radio',
-          'aria-checked': String(ico === atual),
           dataset: { icone: ico },
           onclick: () => {
             atual = ico;
-            for (const b of botoes) {
-              const marcado = b.dataset.icone === atual;
-              b.classList.toggle('ativo', marcado);
-              b.setAttribute('aria-checked', String(marcado));
-            }
-            aoEditar();
-            campo.onChange?.(atual);
+            grupo.pintar();
+            aoEditar(atual);
           },
         }, ico));
 
-      for (const b of botoes) {
-        if (b.dataset.icone === atual) b.classList.add('ativo');
-        grade.appendChild(b);
-      }
-      return { node: grade, foco: botoes[0], ler: () => atual };
+      const grupo = grupoBotoes(grade, botoes, 'icone', () => atual, (v) => {
+        if (!lista.includes(v)) return false;
+        atual = v;
+        return true;
+      });
+      return { ...grupo, ler: () => atual };
     }
 
     case 'segmentado': {
@@ -724,32 +899,27 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
       const inicial = texto(valorInicial);
       let atual = porChave.has(inicial) ? inicial : String(opcoes[0]?.valor ?? '');
 
-      const seg = el('div', { class: 'seg', id, role: 'radiogroup', 'data-campo': campo.name });
+      const seg = el('div', { class: 'seg', id, role: 'radiogroup' });
       const botoes = opcoes.map((o) =>
         el('button', {
           type: 'button',
           class: 'seg-btn',
           role: 'radio',
-          'aria-checked': String(String(o.valor) === atual),
           dataset: { valor: String(o.valor) },
           style: o.cor ? { '--seg-cor': o.cor } : null,
           onclick: () => {
             atual = String(o.valor);
-            for (const b of botoes) {
-              const marcado = b.dataset.valor === atual;
-              b.classList.toggle('ativo', marcado);
-              b.setAttribute('aria-checked', String(marcado));
-            }
-            aoEditar();
-            campo.onChange?.(porChave.get(atual));
+            grupo.pintar();
+            aoEditar(porChave.get(atual));
           },
         }, o.icone ? `${o.icone} ${o.rotulo}` : o.rotulo));
 
-      for (const b of botoes) {
-        if (b.dataset.valor === atual) b.classList.add('ativo');
-        seg.appendChild(b);
-      }
-      return { node: seg, foco: botoes[0], ler: () => (porChave.has(atual) ? porChave.get(atual) : null) };
+      const grupo = grupoBotoes(seg, botoes, 'valor', () => atual, (v) => {
+        if (!porChave.has(v)) return false;
+        atual = v;
+        return true;
+      });
+      return { ...grupo, ler: () => (porChave.has(atual) ? porChave.get(atual) : null) };
     }
 
     case 'texto':
@@ -761,7 +931,7 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
         maxlength: campo.max ?? 200,
         value: texto(valorInicial),
       });
-      return { node: input, foco: input, ler: () => vazioOuNulo(input.value) };
+      return entrada(input, () => vazioOuNulo(input.value));
     }
   }
 }
