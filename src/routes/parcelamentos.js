@@ -15,7 +15,18 @@ import { montarParcelas } from '../services/parcelas.js';
 
 const router = Router();
 
-const TIPOS = ['receita', 'despesa'];
+/**
+ * So´ DESPESA se parcela.
+ *
+ * "Receita em 3x" nao existe: dinheiro que entra em tres vezes sao tres entradas, cada uma
+ * no dia em que cai -- lance as tres, ou marque como recorrente. Aceitar 'receita' aqui
+ * criava um parcelamento que nao significava nada e ainda ia parar na tela de compras
+ * parceladas, junto das compras de verdade.
+ *
+ * A tela ja´ nao oferece a opcao, mas a regra e´ do NEGOCIO, e nao da tela: quem chamar a
+ * API direto tem de ouvir a mesma coisa.
+ */
+const TIPOS = ['despesa'];
 const MIN_PARCELAS = 2;
 const MAX_PARCELAS = 120;
 

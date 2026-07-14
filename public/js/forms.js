@@ -180,6 +180,17 @@ const MAX_PARCELAS = 120;
 const ehTransferencia = (v) => v.tipo === 'transferencia';
 
 /**
+ * Parcelar so´ existe para DESPESA.
+ *
+ * "Receita em 3x" nao e´ uma coisa: dinheiro que entra parcelado sao tres entradas, cada
+ * uma no dia em que cai -- e´ so´ lancar as tres, ou marcar como recorrente. O formulario
+ * oferecia o "parcelar" para receita tambem, e o backend aceitava; quem marcasse geraria
+ * um parcelamento de receita, que nao significa nada e ainda apareceria na tela de
+ * compras parceladas.
+ */
+const ehDespesa = (v) => v.tipo === 'despesa';
+
+/**
  * Descreve a divisao EXATAMENTE como o backend vai grava´-la, para o usuario conferir ANTES
  * de gravar 10 lancamentos no banco.
  */
@@ -210,7 +221,7 @@ export function formTransacao(tx) {
   // avulso: quem ja´ e´ fixo nao tem o que marcar, e uma parcela nao se repete para sempre.
   const podeFixar = edicao && !tx.recorrente_id && !tx.parcelamento_id;
 
-  const parcelando = (v) => podeParcelar && !ehTransferencia(v) && marcado(v.parcelar);
+  const parcelando = (v) => podeParcelar && ehDespesa(v) && marcado(v.parcelar);
 
   // Tudo o que um campo faz com OUTRO campo. Registrado como onChange dos campos que
   // importam, entao vive e morre com o modal -- nada e´ pendurado no #modalForm, que e´ no
@@ -246,7 +257,9 @@ export function formTransacao(tx) {
           label: 'Parcelar esta compra',
           tipo: 'checkbox',
           largura: 'cheio',
-          visivel: (v) => !ehTransferencia(v),
+          // So´ em despesa. Trocar para Receita esconde o campo -- e campo escondido vale
+          // null no submit, entao a marcacao nao vaza para o POST de parcelamento.
+          visivel: ehDespesa,
           onChange: (ligado, campos) => {
             // Semente: abrir o campo vazio faria a previa ja´ nascer reclamando. So´ aqui --
             // no aoMudar geral, isso repreencheria o campo a cada tecla e o usuario nunca
@@ -399,7 +412,10 @@ export function formTransacao(tx) {
         return;
       }
 
-      if (podeParcelar && marcado(v.parcelar)) {
+      // parcelando() e´ o MESMO predicado que decide se o campo aparece: se ele nao esta´ na
+      // tela, nao pode virar parcelamento no submit. Checar `marcado(v.parcelar)` solto
+      // deixaria a porta aberta para uma receita marcada antes da troca de tipo.
+      if (parcelando(v)) {
         const vezes = Number(v.total_parcelas);
         if (!Number.isInteger(vezes) || vezes < MIN_PARCELAS || vezes > MAX_PARCELAS) {
           throw new ApiError(
