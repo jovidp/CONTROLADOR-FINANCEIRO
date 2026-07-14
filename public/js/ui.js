@@ -757,7 +757,27 @@ function montarControle(tipo, campo, valorInicial, id, aoEditar) {
         max: campo.max ?? null,
         value: texto(valorInicial),
       });
-      return entrada(input, () => (input.value.trim() === '' ? null : Number(input.value)));
+      const lerNumero = () => (input.value.trim() === '' ? null : Number(input.value));
+      if (!dinheiro) return entrada(input, lerNumero);
+
+      // Campo de dinheiro: "R$" embutido na moldura e o valor em destaque. O node
+      // vira o wrapper, mas o foco/leitura continuam no input.
+      input.classList.add('input-moeda');
+      const wrap = el(
+        'div',
+        { class: 'campo-moeda' },
+        el('span', { class: 'campo-moeda-simbolo', 'aria-hidden': 'true' }, 'R$'),
+        input,
+      );
+      return {
+        node: wrap,
+        foco: input,
+        ler: lerNumero,
+        escrever: (v) => { input.value = texto(v); },
+        exigir: (v) => { input.required = v; },
+        desabilitar: (v) => { input.disabled = v; },
+        repovoar: () => {},
+      };
     }
 
     case 'data':

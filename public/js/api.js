@@ -116,6 +116,7 @@ export const api = {
     // 401 de "senha errada" viraria um redirect para a propria tela de login.
     sessao: () => request('GET', '/auth/sessao'),
     sair: () => request('POST', '/auth/logout'),
+    trocarSenha: (dados) => request('POST', '/auth/senha', { body: dados }),
   },
 
   categorias: {
@@ -192,6 +193,7 @@ export const api = {
     resumo: (params) => request('GET', '/relatorios/resumo', { params }),
     evolucao: (params) => request('GET', '/relatorios/evolucao', { params }),
     categorias: (params) => request('GET', '/relatorios/categorias', { params }),
+    contas: (params) => request('GET', '/relatorios/contas', { params }),
     anual: (params) => request('GET', '/relatorios/anual', { params }),
     anos: () => request('GET', '/relatorios/anos'),
   },

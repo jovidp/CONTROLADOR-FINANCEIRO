@@ -56,10 +56,12 @@ const ICONE_META_PADRAO = '🏆';
 // Duas listas porque os backends divergem, e um botao a mais aqui vira 400 la:
 // so´ POST/PUT /api/transacoes aceita 'transferencia' (src/routes/transacoes.js);
 // categorias e recorrentes validam contra ['receita','despesa'] e recusam o resto.
+// Cor e icone dao sentido instantaneo ao seletor: o segmentado pinta o item ativo com
+// a `cor` (via --seg-cor) e prefixa o `icone`. Vermelho=sai, verde=entra, azul=so move.
 const TIPOS_LANCAMENTO = [
-  { valor: 'despesa', rotulo: 'Despesa' },
-  { valor: 'receita', rotulo: 'Receita' },
-  { valor: 'transferencia', rotulo: 'Transferência' },
+  { valor: 'despesa', rotulo: 'Despesa', icone: '📤', cor: 'var(--out)' },
+  { valor: 'receita', rotulo: 'Receita', icone: '📥', cor: 'var(--in)' },
+  { valor: 'transferencia', rotulo: 'Transferência', icone: '🔄', cor: 'var(--primaria)' },
 ];
 
 const TIPOS_RECEITA_DESPESA = [

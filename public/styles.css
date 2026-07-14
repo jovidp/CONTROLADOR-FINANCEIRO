@@ -1582,6 +1582,10 @@ th.col-acoes { text-align: right; white-space: nowrap; }
 .bar-mini { width: 72px; height: 7px; }
 .pct-txt { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
 .cat-chip { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+
+/* Chip de conta/cartão: nome em cima, tipo (débito/crédito) embaixo, discreto. */
+.conta-chip-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; line-height: 1.2; }
+.conta-chip-tipo { font-size: 0.74rem; }
 .head-acoes { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* Tooltip: o charts.js ja aplica o essencial inline e le --tip-bg/--tip-fg daqui. */
@@ -1941,6 +1945,35 @@ div.campo {
 
 .campo-dica { font-size: 0.76rem; color: var(--texto-fraco); }
 
+/* Regras da senha na tela de cadastro. */
+.senha-regras {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primaria) 5%, transparent);
+  font-size: 0.76rem;
+  color: var(--texto-fraco);
+}
+.senha-regras li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  line-height: 1.35;
+}
+.senha-regras li::before {
+  content: "•";
+  color: var(--primaria);
+  font-weight: 700;
+  flex: none;
+}
+.senha-regras em { font-style: normal; color: var(--texto); opacity: 0.85; }
+.senha-dica { margin-top: 8px; line-height: 1.4; }
+.senha-dica em { font-style: italic; }
+
 .campo-erro {
   font-size: 0.78rem;
   font-weight: 550;
@@ -1973,6 +2006,28 @@ div.campo {
   accent-color: var(--primaria);
   cursor: pointer;
 }
+
+/* --- Campo de dinheiro: "R$" embutido e o valor em destaque --- */
+.campo-moeda { position: relative; display: flex; align-items: center; }
+.campo-moeda-simbolo {
+  position: absolute;
+  left: 12px;
+  color: var(--texto-fraco);
+  font-weight: 600;
+  font-size: 0.9rem;
+  pointer-events: none; /* o clique atravessa o "R$" e cai no input */
+}
+.input-moeda {
+  padding-left: 36px;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+/* As setinhas de incremento do type=number sao feias e desnecessarias aqui
+   (ja´ ha´ inputmode decimal). Some nos dois motores. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 
 .form-alerta {
   padding: 10px 12px;
@@ -2230,6 +2285,22 @@ div.campo {
 @media (max-width: 720px) {
   body { font-size: 14.5px; }
 
+  /* Ergonomia de toque:
+     - 16px nos campos e´ o limiar que impede o iOS Safari de dar zoom ao focar
+       (aquele "pulo" que desalinha a tela);
+     - botoes com >= 44px de altura e icones 40x40 sao os alvos minimos confortaveis
+       para o dedo (guia da Apple/Material). */
+  .input,
+  input.campo, select.campo, textarea.campo,
+  .filters input, .filters select,
+  .month-picker input, select#relAno { font-size: 16px; }
+
+  .btn, .primary-btn, .btn-primario,
+  .ghost-btn, .btn-ghost,
+  .danger-btn, .btn-perigo { min-height: 44px; }
+
+  .icon-btn, .btn-icone { width: 40px; height: 40px; font-size: 1.05rem; }
+
   .topbar {
     flex-direction: column;
     align-items: stretch;
@@ -2437,6 +2508,7 @@ div.campo {
   display: grid;
   place-items: center;
   min-height: 100vh;
+  min-height: 100dvh; /* conta a barra do navegador no celular; fallback acima */
   padding: 24px;
   background: var(--bg);
 }
@@ -2508,4 +2580,29 @@ div.campo {
   text-align: center;
   font-size: 0.78rem;
   color: var(--texto-fraco);
+}
+
+/* --- Celular ------------------------------------------------------- */
+@media (max-width: 480px) {
+  .login-body {
+    padding: 16px;
+    /* Com o teclado aberto a viewport encurta; centralizar esconderia os
+       campos de cima. Alinhar ao topo mantem tudo alcancavel. */
+    align-items: start;
+  }
+  .login-caixa { gap: 14px; max-width: 100%; }
+  .login-card { padding: 18px 16px; }
+  .login-titulo { font-size: 1.2rem; }
+
+  /* 16px e´ o limiar abaixo do qual o iOS Safari da´ zoom ao focar o campo --
+     aquele "pulo" que desalinha a tela. Em 16px, o foco nao dispara o zoom. */
+  .login-body .input { font-size: 16px; }
+
+  /* Alvo de toque confortavel (>= 40px) no olho de mostrar/ocultar senha. */
+  .login-ver { width: 40px; height: 40px; }
+
+  /* O seletor de tipo (Despesa/Receita/Transferência) empilha na vertical: cada
+     opção ganha a largura toda, então o rótulo com ícone nunca quebra nem aperta. */
+  .seg { flex-direction: column; }
+  .seg-btn { padding: 11px 12px; }
 }

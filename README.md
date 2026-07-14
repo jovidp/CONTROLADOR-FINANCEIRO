@@ -41,7 +41,8 @@ próprios dados.
 | `npm run lint` | ESLint no backend e no frontend. |
 | `npm run smoke` | Testes de integridade contra o banco real (roda tudo em transação e dá ROLLBACK). |
 | `npm run db:migrate` | Aplica as migrations pendentes. |
-| `npm run db:backup` | Backup com `pg_dump` em `backups/`. |
+| `npm run db:backup` | Backup com `pg_dump` em `backups/`, **cifrado** (ver Segurança). |
+| `npm run db:restore -- backups/<arq>` | Restaura um backup por cima do banco atual. |
 | `npm run senha` | Gera/troca o hash da senha. |
 | `npm run manutencao:on -- "motivo"` | Põe o app na página de manutenção. |
 | `npm run manutencao:off` | Tira. |
@@ -67,8 +68,12 @@ usuários para você escolher.
 ### Restaurar um backup
 
 ```bash
-pg_restore -h localhost -U fin_app -d controlador_financeiro --clean backups/<arquivo>.dump
+npm run db:restore -- backups/controlador_financeiro_2026-07-14-11-06-34_manual.dump.enc
 ```
+
+Ele decifra num arquivo temporário (apagado no fim), põe o app em manutenção e chama o
+`pg_restore --clean`. Antes de sobrescrever qualquer coisa, tira um backup do estado
+**atual** — se o arquivo não for o que você esperava, ainda dá para voltar.
 
 ---
 
@@ -135,3 +140,55 @@ logon), com a saída indo para `logs/servidor.log`. É o que dá ao Tailscale Se
 publicar no tailnet. O cookie de sessão ajusta o `secure` conforme o protocolo da
 requisição, então o app funciona em `http://localhost` e em `https://...ts.net` sem
 trocar nenhuma configuração.
+
+---
+
+## Segurança
+
+Dentro do tailnet, quem alcança a porta já foi autenticado pelo Tailscale. Com o
+**Funnel** ligado, o app fica na internet aberta e o login passa a ser a **única**
+parede. O que sustenta essa parede:
+
+**O IP do cliente vem do `req.ip`, nunca do primeiro item do `X-Forwarded-For.`** Esse
+cabeçalho é uma lista que cada proxy vai *anexando* — e o começo dela pode ter vindo do
+próprio cliente. Lendo o primeiro item (como o código fazia), bastava mandar um
+`X-Forwarded-For` diferente a cada tentativa para cair numa chave nova toda vez: o freio
+de 5 tentativas contava até 1 para sempre, e a força bruta era livre. O `trust proxy:
+'loopback'` do Express anda pela lista da direita para a esquerda e para no primeiro
+endereço que não é de confiança — o que o Tailscale escreveu, e não o que o cliente
+inventou.
+
+**Dois freios separados, nunca um global.** Login (por usuário+IP) e cadastro (por IP)
+têm contadores próprios: adivinhar a senha de alguém e criar contas em massa são ataques
+diferentes, e a cota de um não pode ser consumida pelo outro. Um contador *global*
+deixaria qualquer um trancar o login de todo mundo errando cinco senhas de propósito.
+
+**A CSP bloqueia todo script inline, por hash.** Os `<script>` escritos dentro do HTML
+(o que aplica o tema antes da primeira pintura) são liberados pelo `sha256` do conteúdo,
+calculado do arquivo no boot. Um script *injetado* tem outro conteúdo, logo outro hash,
+logo não roda. Junto vão `frame-ancestors 'none'` (clickjacking), `nosniff`, HSTS no
+HTTPS e `Referrer-Policy: no-referrer`.
+
+**Senha nova exige 12+ caracteres** e recusa as óbvias (`123456789012`, o nome do app, o
+próprio login com números colados). A regra vale só para senhas **novas**: endurecê-la
+não pode trancar do lado de fora quem se cadastrou quando ela era outra.
+
+**`/api/health` fala pouco com quem vem de fora.** O nome do banco e a versão exata do
+PostgreSQL só saem para o `127.0.0.1` — de fora, apenas `{ok:true}`.
+
+### Os backups são cifrados (`BACKUP_CHAVE`)
+
+O banco em si **não** é cifrado, e não deve ser: os valores precisam ser somados pelo
+PostgreSQL (a `vw_saldo_contas` deriva o saldo das transações), e um número cifrado não
+soma. Também não protegeria de nada — quem chega ao seu Windows chega ao `.env`, onde a
+chave estaria.
+
+O backup é outra história: é o **único** lugar onde os seus dados saem da máquina
+inteiros, num arquivo só, que vai para um pendrive, um e-mail ou uma nuvem. Ele é cifrado
+com **AES-256-GCM** (`src/cripto.js`), com a chave derivada da `BACKUP_CHAVE` por scrypt
+e um salt novo a cada arquivo. GCM cifra **e autentica**: um `.enc` adulterado não
+decifra "quase certo" — ele falha, alto e claro.
+
+> **Guarde uma cópia da `BACKUP_CHAVE` fora desta máquina.** Sem ela, nenhum backup pode
+> ser restaurado — nem por você. Com a variável vazia, os dumps saem em texto claro e o
+> servidor avisa a cada backup.

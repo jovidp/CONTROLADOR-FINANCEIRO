@@ -7,6 +7,8 @@ const loginSub = document.getElementById('loginSub');
 const usuarioCadastro = document.getElementById('usuarioCadastro');
 const senhaCadastro = document.getElementById('senhaCadastro');
 const confirmacaoCadastro = document.getElementById('confirmacaoCadastro');
+const campoConvite = document.getElementById('campoConvite');
+const conviteCadastro = document.getElementById('conviteCadastro');
 const btnCadastrar = document.getElementById('btnCadastrar');
 const cadastroErro = document.getElementById('cadastroErro');
 
@@ -19,8 +21,11 @@ const erro = document.getElementById('erro');
 const sucesso = document.getElementById('sucesso');
 
 const SEM_SERVIDOR = 'Não consegui falar com o servidor. Ele está rodando?';
-const REQUISITOS_SENHA = /^.{4,60}$/;
-const MSG_REQUISITOS = 'A senha deve ter de 4 a 60 caracteres.';
+// Espelha o problemaNaSenha() do servidor -- so´ o tamanho, que e´ o que adianta checar
+// aqui. O resto (senhas obvias, senha = usuario) fica so´ no servidor: a checagem do
+// navegador e´ conveniencia, e nao defesa; quem ataca nao passa por esta pagina.
+const REQUISITOS_SENHA = /^.{12,200}$/;
+const MSG_REQUISITOS = 'A senha deve ter pelo menos 12 caracteres.';
 
 function mostrar(box, mensagem) {
   box.textContent = mensagem;
@@ -91,6 +96,8 @@ async function cadastrar(ev) {
         usuario: usuarioCadastro.value.trim(),
         senha: senhaCadastro.value,
         confirmacao: confirmacaoCadastro.value,
+        // Vai sempre; o servidor ignora quando o cadastro é aberto e exige quando não é.
+        convite: conviteCadastro.value.trim(),
       }),
     });
 
@@ -166,6 +173,12 @@ async function iniciar() {
   try {
     const { resposta, corpo } = await respostaJson('/api/auth/status');
     if (!resposta.ok) throw new Error(corpo?.erro || 'status');
+    // Convite exigido: revela o campo e o torna obrigatório. Escondido, um `required`
+    // faria o reportValidity() tentar focar um campo invisível e travar o cadastro.
+    if (corpo.convite_exigido) {
+      campoConvite.classList.remove('hidden');
+      conviteCadastro.required = true;
+    }
     alternarTela(corpo.cadastrado ? 'login' : 'cadastro');
   } catch {
     // Se o status falhar, mantém o cadastro como primeiro acesso e informa o

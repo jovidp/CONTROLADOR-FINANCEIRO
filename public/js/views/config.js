@@ -58,8 +58,81 @@ export async function montar(container) {
   container.replaceChildren(
     secaoContas(container, contas, erroContas),
     secaoTipos(container, tipos, erroTipos),
+    secaoSeguranca(),
     secaoBanco(health, erroHealth),
     secaoSobre(health),
+  );
+}
+
+// =====================================================================
+// Conta e segurança — troca de senha
+// =====================================================================
+
+function secaoSeguranca() {
+  const atual = el('input', {
+    class: 'input', type: 'password', autocomplete: 'current-password',
+    placeholder: 'Senha atual', 'aria-label': 'Senha atual',
+  });
+  const nova = el('input', {
+    class: 'input', type: 'password', autocomplete: 'new-password',
+    minlength: '12', maxlength: '200',
+    placeholder: 'Nova senha (mín. 12 caracteres)', 'aria-label': 'Nova senha',
+  });
+  const conf = el('input', {
+    class: 'input', type: 'password', autocomplete: 'new-password',
+    minlength: '12', maxlength: '200',
+    placeholder: 'Confirmar nova senha', 'aria-label': 'Confirmar nova senha',
+  });
+  const btn = el('button', { class: 'primary-btn', type: 'submit' }, 'Trocar senha');
+
+  const form = el(
+    'form',
+    { class: 'form-grid', autocomplete: 'off' },
+    el('div', { class: 'campo' }, atual),
+    el('div', { class: 'campo' }, nova),
+    el('div', { class: 'campo' }, conf),
+    btn,
+  );
+
+  form.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    // Checagem local so por conveniencia: a regra de verdade (12+, senha != usuario,
+    // nao-obvia, senha atual correta) e´ do servidor, que ve o que o navegador nao ve.
+    if (nova.value !== conf.value) {
+      toast('As senhas não são iguais.', 'erro');
+      return;
+    }
+    btn.disabled = true;
+    try {
+      await api.auth.trocarSenha({
+        senha_atual: atual.value,
+        senha_nova: nova.value,
+        confirmacao: conf.value,
+      });
+      form.reset();
+      toast('Senha trocada.', 'ok');
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Não consegui trocar a senha.', 'erro');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  return el(
+    'section',
+    { class: 'secao' },
+    el(
+      'div',
+      { class: 'card' },
+      el('div', { class: 'card-head' }, el('h2', {}, 'Conta e segurança')),
+      el(
+        'p',
+        { class: 'muted' },
+        'Troque a sua senha. Você precisa da senha atual para confirmar — assim, um acesso ' +
+          'aberto por engano não consegue trocar a senha e tomar a conta.',
+      ),
+      form,
+    ),
   );
 }
 
@@ -434,13 +507,6 @@ function secaoBanco(health, erro) {
       { class: 'card' },
       el('div', { class: 'card-head' }, el('h2', {}, 'Banco de dados'), selo),
       corpo,
-      el(
-        'p',
-        { class: ['muted', 'nota'] },
-        'Os seus dados vivem no PostgreSQL local — não no navegador. Nada é guardado em localStorage ' +
-          '(só a preferência de tema claro/escuro). Limpar o cache ou trocar de navegador não apaga nenhum ' +
-          'lançamento; e o app não funciona com o servidor desligado.',
-      ),
     ),
   );
 }
@@ -496,9 +562,8 @@ function secaoSobre(health) {
       el(
         'p',
         { class: 'muted' },
-        'Não existe "exportar/importar JSON" aqui: como os dados estão no PostgreSQL, o backup de ' +
-          'verdade é o pg_dump — ele salva tudo (transações, contas, categorias, metas, orçamentos e ' +
-          'recorrentes) num arquivo só, e o pg_restore devolve.',
+        'O backup salva tudo (transações, contas, categorias, metas, orçamentos e recorrentes) ' +
+          'num arquivo só, que a restauração devolve.',
       ),
       blocoComandos(comandoBackup(banco), 'Comandos de backup'),
       el(

@@ -13,12 +13,24 @@ export const config = {
     user: process.env.PG_SUPERUSER || 'postgres',
     password: process.env.PG_SUPERPASSWORD || '',
   },
-  // Login de usuario unico. Sem default nenhum: faltando qualquer um dos tres, o
-  // servidor se recusa a subir e manda rodar `npm run senha`. Um valor padrao
-  // aqui seria uma senha publica escondida no codigo.
+  // AUTH_USUARIO/AUTH_SENHA_HASH: login legado do .env, para instalacoes anteriores ao
+  // cadastro pelo navegador. Hoje o normal e´ deixa-los vazios (o usuario nasce no banco).
+  // SESSION_SECRET: se preenchido, o server.js exige >= 32 caracteres no boot (segredo
+  // curto = cookie forjavel); se vazio, o auth.js sorteia um efemero forte a cada boot.
   auth: {
     usuario: process.env.AUTH_USUARIO || '',
     senhaHash: process.env.AUTH_SENHA_HASH || '',
     segredo: process.env.SESSION_SECRET || '',
+  },
+  // Cifra os arquivos de backups/. Vazia, o dump fica em texto claro -- o que so´ e´
+  // aceitavel enquanto ele nunca sair desta maquina.
+  backup: {
+    chave: process.env.BACKUP_CHAVE || '',
+  },
+  // Codigo de convite do cadastro. Preenchido, o cadastro passa a EXIGI-LO: ninguem cria
+  // conta sem ele. Vazio, o cadastro fica aberto (ok atras do tailnet ou em localhost;
+  // no Funnel, preencha). Entregue o codigo so´ a quem for usar o app.
+  cadastro: {
+    convite: process.env.CADASTRO_CONVITE || '',
   },
 };

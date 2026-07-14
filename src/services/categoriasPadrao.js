@@ -19,12 +19,13 @@ export const CONTAS_PADRAO = [
   ['Conta Corrente', 'corrente', 0, '#3b82f6'],
 ];
 
-// Os mesmos cinco que a 010_tipos_conta.sql deu a quem ja´ existia. A chave e´ o que
-// contas.tipo guarda; o rotulo e o icone o usuario edita quando quiser.
+// A chave e´ o que contas.tipo guarda; o rotulo e o icone o usuario edita quando quiser.
+// (Os cinco primeiros vieram da 010_tipos_conta.sql; o cartao de debito, da 016.)
 export const TIPOS_CONTA_PADRAO = [
   ['corrente', 'Conta corrente', '🏦'],
   ['poupanca', 'Poupança', '🐖'],
   ['carteira', 'Carteira', '👛'],
+  ['cartao-debito', 'Cartão de débito', '💳'],
   ['credito', 'Cartão de crédito', '💳'],
   ['investimento', 'Investimento', '📈'],
 ];

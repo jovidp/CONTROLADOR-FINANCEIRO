@@ -1,5 +1,9 @@
 node_modules/
 .env
+# Copias do .env (ex.: .env.bak-<timestamp>) guardam segredos: nunca versionar.
+.env.*
+!.env.example
+*.bak
 *.log
 backups/
 

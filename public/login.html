@@ -31,6 +31,15 @@
   </div>
 
   <form id="cadastroForm" class="card login-card" novalidate>
+    <!-- Escondido por padrão; o login.js mostra quando o servidor exige convite
+         (GET /api/auth/status devolve convite_exigido). -->
+    <div id="campoConvite" class="campo campo-cheio hidden">
+      <label class="campo-label" for="conviteCadastro">Código de convite</label>
+      <input id="conviteCadastro" class="input" name="convite" type="text"
+             autocomplete="off" autocapitalize="none" spellcheck="false">
+      <small class="campo-dica">Peça o código a quem administra o app.</small>
+    </div>
+
     <div class="campo campo-cheio">
       <label class="campo-label" for="usuarioCadastro">Usuário</label>
       <input id="usuarioCadastro" class="input" name="usuario" type="text"
@@ -41,15 +50,24 @@
     <div class="campo campo-cheio">
       <label class="campo-label" for="senhaCadastro">Senha</label>
       <input id="senhaCadastro" class="input" name="senha" type="password"
-             autocomplete="new-password" minlength="4" maxlength="60"
-             required>
-      <small class="campo-dica">Use de 4 a 60 caracteres.</small>
+             autocomplete="new-password" minlength="12" maxlength="200"
+             aria-describedby="senhaRegras" required>
+      <ul id="senhaRegras" class="senha-regras">
+        <li>Pelo menos <strong>12 caracteres</strong> — pode ter espaços e acentos.</li>
+        <li>Nada de senha óbvia (<em>123456789012</em>, <em>password</em>, <em>qwerty</em>…).</li>
+        <li>Não pode ser um caractere repetido, nem o seu nome de usuário.</li>
+      </ul>
+      <p class="campo-dica senha-dica">
+        💡 <strong>Dica:</strong> junte 3–4 palavras que só você combinaria —
+        <em>“pizza de sexta com refri”</em>. Fácil de lembrar, difícil de quebrar,
+        e vale mais que símbolos complicados.
+      </p>
     </div>
 
     <div class="campo campo-cheio">
       <label class="campo-label" for="confirmacaoCadastro">Confirmar senha</label>
       <input id="confirmacaoCadastro" class="input" name="confirmacao" type="password"
-             autocomplete="new-password" minlength="4" maxlength="60" required>
+             autocomplete="new-password" minlength="12" maxlength="200" required>
     </div>
 
     <p id="cadastroErro" class="campo-erro login-erro hidden" role="alert" aria-live="polite"></p>
@@ -86,7 +104,7 @@
     <p class="login-alternativa">Primeiro acesso? <button id="btnIrCadastro" class="link-btn" type="button">Criar cadastro</button></p>
   </form>
 
-  <p class="login-rodape">Seus dados ficam no PostgreSQL, nesta máquina.</p>
+  <p class="login-rodape">🔒 Acesso privado. Cada pessoa vê apenas os próprios dados.</p>
 </main>
 
 <script type="module" src="/js/login.js?v=20260713-4"></script>

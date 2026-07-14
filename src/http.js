@@ -117,7 +117,10 @@ export function traduzErroPg(err) {
     case '23514': // check_violation
       return badRequest('Valores fora das regras permitidas (verifique tipo, valor e datas).');
     case '23502': // not_null_violation
-      return badRequest(`Campo obrigatório ausente: ${err.column}.`, err.column);
+      // Nao ecoa err.column: o nome interno da coluna (usuario_id, tipo_id...) desenha o
+      // schema para quem sonda a API. A validacao da rota ja nomeia o campo publico quando
+      // o erro e´ do usuario; aqui, generico.
+      return badRequest('Falta um campo obrigatório na requisição.');
     case '22P02': // invalid_text_representation
       return badRequest('Formato de dado inválido.');
     default:

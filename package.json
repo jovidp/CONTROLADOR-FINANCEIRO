@@ -14,6 +14,7 @@
     "db:create": "node src/scripts/create-db.js",
     "db:migrate": "node src/scripts/migrate.js",
     "db:backup": "node src/scripts/backup.js",
+    "db:restore": "node src/scripts/restore.js",
     "db:seed": "node src/scripts/seed.js",
     "db:limpar": "node src/scripts/limpar.js",
     "db:reset": "node src/scripts/reset.js",

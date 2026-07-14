@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { config } from './config.js';
 import { pool, withTransaction } from './db.js';
 import { HttpError } from './http.js';
+import { criarFreio, ipDoCliente } from './seguranca.js';
 import { garantirPadroes } from './services/categoriasPadrao.js';
 
 const scrypt = promisify(crypto.scrypt);
@@ -37,6 +38,13 @@ export function gerarHash(senha) {
   const chave = crypto.scryptSync(senha, salt, SCRYPT.keylen, SCRYPT);
   return ['scrypt', SCRYPT.N, SCRYPT.r, SCRYPT.p, salt.toString('base64'), chave.toString('base64')].join('$');
 }
+
+// Hash "isca": um scrypt de verdade, de uma senha aleatoria que ninguem sabe. Serve para
+// gastar o MESMO tempo (~100ms) quando o usuario NAO existe. Sem ele, o login de um nome
+// inexistente retornava na hora (sem rodar scrypt) e o de um nome real demorava os 100ms
+// do hash -- e essa diferenca de tempo dizia a um atacante quais usuarios existem, mesmo
+// com a mensagem de erro sendo sempre a mesma.
+const HASH_ISCA = gerarHash(crypto.randomBytes(32).toString('hex'));
 
 async function usuarioDoBanco(usuario) {
   const { rows } = await pool.query(
@@ -118,12 +126,33 @@ export async function conferirCredenciais(usuario, senha) {
 
   // Compatibilidade com instalações antigas que ainda usam AUTH_* no .env.
   const usuarioOk = igual(usuario, config.auth.usuario);
-  const senhaOk = await conferirHash(senha, config.auth.senhaHash);
-  if (!usuarioOk || !senhaOk) return null;
+  // conferirHash roda scrypt SEMPRE: contra o hash legado, se existir, senao contra o
+  // HASH_ISCA. E o que iguala o tempo de "usuario nao existe" ao de "senha errada" -- a
+  // isca e descartada logo abaixo, ela so existe para o relogio nao denunciar o usuario.
+  const senhaOk = await conferirHash(senha, config.auth.senhaHash || HASH_ISCA);
+  if (!usuarioOk || !config.auth.senhaHash || !senhaOk) return null;
   const legado = await garantirUsuarioLegado();
   if (!legado) return null;
   await garantirPadroes(pool, legado.id);
   return { id: legado.id, usuario: legado.usuario };
+}
+
+/**
+ * Troca a senha de quem esta´ logado. Exige a senha ATUAL: um cookie roubado nao pode
+ * mudar a senha (e assim se apossar da conta) sem conhece-la. A validacao de forca da
+ * senha nova mora na rota, junto da politica de cadastro.
+ */
+export async function trocarSenha(usuarioId, senhaAtual, senhaNova) {
+  const { rows } = await pool.query('SELECT usuario, senha_hash FROM usuarios WHERE id = $1', [usuarioId]);
+  const atual = rows[0];
+  if (!atual) throw new HttpError(401, 'Sessão inválida. Faça login de novo.');
+
+  if (!(await conferirHash(senhaAtual, atual.senha_hash))) {
+    throw new HttpError(403, 'A senha atual está incorreta.', 'senha_atual');
+  }
+
+  await pool.query('UPDATE usuarios SET senha_hash = $1 WHERE id = $2', [gerarHash(senhaNova), usuarioId]);
+  return { usuario: atual.usuario };
 }
 
 export async function cadastroStatus() {
@@ -132,7 +161,22 @@ export async function cadastroStatus() {
     cadastrado: Boolean(cadastrado),
     usuario: cadastrado?.usuario ?? null,
     legado: Boolean(config.auth.usuario && config.auth.senhaHash),
+    // Nao e´ segredo: dizer que existe um convite nao entrega o convite. O frontend usa
+    // isto so´ para decidir se mostra o campo.
+    conviteExigido: Boolean(config.cadastro.convite),
   };
+}
+
+/**
+ * Confere o convite em tempo CONSTANTE. Comparar com === vazaria, pelo tempo ate´ o
+ * primeiro caractere diferente, quantos caracteres iniciais o atacante acertou.
+ */
+export function conviteConfere(enviado) {
+  const esperado = config.cadastro.convite;
+  if (!esperado) return true; // cadastro aberto: nao ha´ convite a conferir
+  const a = Buffer.from(String(enviado ?? ''));
+  const b = Buffer.from(esperado);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 export async function cadastrarUsuario(usuario, senha) {
@@ -242,25 +286,17 @@ export function limparCookie(res, req) {
 
 // --- Freio de tentativas ---------------------------------------------
 //
-// Em memoria, POR TENTATIVA (quem + de onde), e nao global.
-//
 // O freio nasceu global, com a justificativa de que "e´ um app de um usuario so´, nao
 // ha´ o que separar". Isso deixou de ser verdade: /api/auth/cadastro e´ publico, o
 // login tem botao de "criar conta" e hoje ha´ varias pessoas no banco. Com o contador
 // global, CINCO senhas erradas de QUALQUER UM trancavam o login de TODO MUNDO por ate´
 // 5 minutos -- negacao de servico de graca, sem nem precisar de uma conta.
 //
-// Reiniciar o servidor zera o freio. Quem tem acesso ao console ja´ tem acesso ao .env,
-// entao nao ha´ o que proteger nesse cenario.
+// A mecanica agora mora em seguranca.js (`criarFreio`), porque o cadastro tem o dele:
+// adivinhar a senha de alguem e criar contas em massa sao ataques diferentes, e a cota
+// de um nao pode ser consumida pelo outro.
 
-const MAX_FALHAS = 5;
-const BLOQUEIO_BASE_MS = 30_000;
-const BLOQUEIO_MAX_MS = 5 * 60_000;
-const ESQUECER_APOS_MS = 15 * 60_000;
-const MAX_CHAVES = 1000;
-
-/** chave -> { falhas, bloqueadoAte, ultimaFalha } */
-const tentativas = new Map();
+const freioLogin = criarFreio({ maxFalhas: 5, bloqueioBaseMs: 30_000, bloqueioMaxMs: 5 * 60_000 });
 
 /**
  * Quem esta´ tentando: usuario + IP.
@@ -268,62 +304,18 @@ const tentativas = new Map();
  * So´ o usuario permitiria a um estranho trancar a SUA conta de fora, de qualquer
  * lugar. So´ o IP permitiria varrer varios usuarios a partir de uma maquina so´.
  * Os dois juntos travam a forca bruta sem dar a ninguem o poder de trancar outro.
+ *
+ * O IP vem do `ipDoCliente`, e nao mais do primeiro item do X-Forwarded-For: aquele
+ * item o proprio atacante escrevia, e trocando-o a cada tentativa ele ganhava uma chave
+ * nova toda vez -- o freio contava ate´ 1 para sempre.
  */
 export function chaveTentativa(req, usuario) {
-  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || 'local';
-  return `${String(usuario ?? '').toLowerCase()}@${ip}`;
+  return `${String(usuario ?? '').toLowerCase()}@${ipDoCliente(req)}`;
 }
 
-/** Impede que um ataque com usuarios aleatorios faca o Map crescer sem limite. */
-function podar() {
-  if (tentativas.size <= MAX_CHAVES) return;
-  const agora = Date.now();
-  for (const [chave, t] of tentativas) {
-    if (agora - t.ultimaFalha > ESQUECER_APOS_MS && t.bloqueadoAte <= agora) tentativas.delete(chave);
-  }
-  // Ainda cheio (ataque em curso): descarta as mais antigas. O Map do JS preserva a
-  // ordem de insercao, entao as primeiras chaves sao as mais velhas.
-  if (tentativas.size > MAX_CHAVES) {
-    for (const chave of [...tentativas.keys()].slice(0, tentativas.size - MAX_CHAVES)) {
-      tentativas.delete(chave);
-    }
-  }
-}
-
-/** Segundos restantes de bloqueio para esta chave (0 = liberado). */
-export function segundosBloqueado(chave) {
-  const t = tentativas.get(chave);
-  if (!t) return 0;
-  const restante = t.bloqueadoAte - Date.now();
-  return restante > 0 ? Math.ceil(restante / 1000) : 0;
-}
-
-export function registrarFalha(chave) {
-  const agora = Date.now();
-  const t = tentativas.get(chave) ?? { falhas: 0, bloqueadoAte: 0, ultimaFalha: 0 };
-
-  // Quinze minutos sem errar zera a conta. Sem isso, um erro de digitacao hoje somaria
-  // com os de semanas atras e mandaria o dono da casa esperar 5 minutos -- castigo de
-  // ataque, aplicado a quem so´ trocou uma tecla. O ataque de verdade e´ rapido, e
-  // nessa janela o contador nao decai.
-  if (t.ultimaFalha && agora - t.ultimaFalha > ESQUECER_APOS_MS) t.falhas = 0;
-
-  t.falhas += 1;
-  t.ultimaFalha = agora;
-
-  if (t.falhas >= MAX_FALHAS) {
-    // Dobra a espera a cada falha extra: 30s, 1min, 2min... ate 5min.
-    const espera = Math.min(BLOQUEIO_MAX_MS, BLOQUEIO_BASE_MS * 2 ** (t.falhas - MAX_FALHAS));
-    t.bloqueadoAte = agora + espera;
-  }
-
-  tentativas.set(chave, t);
-  podar();
-}
-
-export function registrarAcerto(chave) {
-  tentativas.delete(chave);
-}
+export const segundosBloqueado = (chave) => freioLogin.segundosBloqueado(chave);
+export const registrarFalha = (chave) => freioLogin.registrarFalha(chave);
+export const registrarAcerto = (chave) => freioLogin.registrarAcerto(chave);
 
 // --- Middleware ------------------------------------------------------
 

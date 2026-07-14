@@ -11,7 +11,7 @@
  */
 
 import { api, ApiError } from '../api.js';
-import { state } from '../state.js';
+import { state, tipoContaPorChave } from '../state.js';
 import {
   el,
   fmtMoeda,
@@ -59,6 +59,7 @@ export async function montar(container) {
   let anos;
   let anual;
   let categorias;
+  let contas;
 
   try {
     const lista = await api.relatorios.anos();
@@ -73,13 +74,11 @@ export async function montar(container) {
     }
 
     const ano = anoEscolhido;
-    [anual, categorias] = await Promise.all([
+    const periodo = { de: `${ano}-01-01`, ate: `${ano}-12-31`, tipo: 'despesa' };
+    [anual, categorias, contas] = await Promise.all([
       api.relatorios.anual({ ano }),
-      api.relatorios.categorias({
-        de: `${ano}-01-01`,
-        ate: `${ano}-12-31`,
-        tipo: 'despesa',
-      }),
+      api.relatorios.categorias(periodo),
+      api.relatorios.contas(periodo),
     ]);
   } catch (err) {
     if (token !== execucao) return;
@@ -94,6 +93,7 @@ export async function montar(container) {
     ano: anoEscolhido,
     anual: anual ?? {},
     categorias: Array.isArray(categorias) ? categorias : [],
+    contas: Array.isArray(contas) ? contas : [],
   });
 }
 
@@ -107,7 +107,7 @@ function mostrarErro(container, err) {
   container.replaceChildren(card);
 }
 
-function renderizar(container, { anos, ano, anual, categorias }) {
+function renderizar(container, { anos, ano, anual, categorias, contas }) {
   const meses = Array.isArray(anual.meses) ? anual.meses : [];
 
   // O gráfico precisa do nó já montado para medir no hover: cria o alvo antes.
@@ -118,6 +118,7 @@ function renderizar(container, { anos, ano, anual, categorias }) {
     cardGrafico(alvoGrafico, ano),
     secaoIndicadores(anual),
     cardCategorias(categorias, ano),
+    cardContas(contas, ano),
   );
 
   barrasEmpilhadas(alvoGrafico, meses, {
@@ -370,7 +371,7 @@ function linhaCategoria(cat) {
     {},
     el(
       'td',
-      {},
+      { class: 'col-descricao', 'data-rotulo': 'Categoria' },
       el(
         'span',
         { class: 'cat-chip' },
@@ -378,22 +379,16 @@ function linhaCategoria(cat) {
         cat.nome ?? 'Sem categoria',
       ),
     ),
-    el('td', { class: 'num' }, fmtMoeda(totalCat)),
+    el('td', { class: 'num', 'data-rotulo': 'Total' }, fmtMoeda(totalCat)),
     el(
       'td',
-      { class: 'col-pct' },
+      { class: 'col-pct', 'data-rotulo': '% do total' },
       el(
         'div',
         { class: 'pct-cel' },
         el(
           'div',
-          {
-            class: ['bar', 'bar-mini'],
-            role: 'progressbar',
-            'aria-valuenow': String(Math.round(largura)),
-            'aria-valuemin': '0',
-            'aria-valuemax': '100',
-          },
+          { class: ['bar', 'bar-mini'], 'aria-hidden': 'true' },
           el('div', { class: 'bar-fill', style: { width: `${largura}%`, background: cor } }),
         ),
         el('span', { class: 'pct-txt' }, fmtPct(pct)),
@@ -401,8 +396,135 @@ function linhaCategoria(cat) {
     ),
     // A média divide por 12 (o ano inteiro), não pelos meses em que houve gasto:
     // é o "quanto essa categoria pesa por mês no orçamento anual".
-    el('td', { class: 'num' }, fmtMoeda(totalCat / 12)),
-    el('td', { class: 'num' }, String(num(cat.transacoes))),
+    el('td', { class: 'num', 'data-rotulo': 'Média/mês' }, fmtMoeda(totalCat / 12)),
+    el('td', { class: 'num', 'data-rotulo': 'Transações' }, String(num(cat.transacoes))),
+  );
+}
+
+// =====================================================================
+// Gastos por conta / cartão no ano
+// =====================================================================
+
+function cardContas(contas, ano) {
+  const card = el(
+    'div',
+    { class: 'card' },
+    el(
+      'div',
+      { class: 'card-head' },
+      el('h2', {}, `Gastos por conta e cartão em ${ano}`),
+      el('span', { class: 'muted' }, `${contas.length} conta(s)`),
+    ),
+    el(
+      'p',
+      { class: 'muted' },
+      'Some as compras de cada cartão ou conta. Débito e crédito aparecem separados quando são contas diferentes.',
+    ),
+  );
+
+  if (!contas.length) {
+    const corpo = el('div');
+    vazio(corpo, {
+      ico: '💳',
+      msg: `Nenhuma despesa lançada em ${ano}. Lance suas compras escolhendo o cartão em "Conta".`,
+    });
+    card.appendChild(corpo);
+    return card;
+  }
+
+  const linhas = [...contas].sort((a, b) => num(b.total) - num(a.total));
+  const total = linhas.reduce((soma, c) => soma + num(c.total), 0);
+  const transacoes = linhas.reduce((soma, c) => soma + num(c.transacoes), 0);
+
+  card.appendChild(
+    el(
+      'div',
+      { class: 'tabela-wrap' },
+      el(
+        'table',
+        { class: 'tabela' },
+        el(
+          'thead',
+          {},
+          el(
+            'tr',
+            {},
+            el('th', {}, 'Conta / cartão'),
+            el('th', { class: 'num' }, 'Total'),
+            el('th', { class: 'col-pct' }, '% do total'),
+            el('th', { class: 'num' }, 'Média/mês'),
+            el('th', { class: 'num' }, 'Compras'),
+          ),
+        ),
+        el('tbody', {}, linhas.map(linhaConta)),
+        el(
+          'tfoot',
+          {},
+          el(
+            'tr',
+            {},
+            el('th', {}, 'TOTAL'),
+            el('td', { class: 'num' }, el('strong', {}, fmtMoeda(total))),
+            el('td', { class: 'col-pct' }, el('strong', {}, fmtPct(total > 0 ? 100 : 0))),
+            el('td', { class: 'num' }, el('strong', {}, fmtMoeda(total / 12))),
+            el('td', { class: 'num' }, el('strong', {}, String(transacoes))),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  return card;
+}
+
+function linhaConta(conta) {
+  const cor = conta.cor || '#94a3b8';
+  const totalConta = num(conta.total);
+  const pct = num(conta.percentual);
+  const largura = Math.max(0, Math.min(100, pct));
+  // tipo_conta e´ a chave (credito, cartao-debito...) ou null quando a despesa nao tem
+  // conta; o helper devolve um fallback com icone de banco em vez de "undefined".
+  const meta = tipoContaPorChave(conta.tipo_conta);
+
+  return el(
+    'tr',
+    {},
+    el(
+      'td',
+      { class: 'col-descricao', 'data-rotulo': 'Conta / cartão' },
+      el(
+        'span',
+        { class: 'cat-chip' },
+        el('span', { class: 'cat-ico', style: { background: `${cor}33` } }, meta.icone),
+        el(
+          'span',
+          { class: 'conta-chip-txt' },
+          el('span', {}, conta.nome ?? 'Sem conta'),
+          // Sem o subtitulo quando nao ha tipo (despesa sem conta): o fallback do
+          // tipoContaPorChave devolveria "Conta", que se leria como um tipo de verdade.
+          conta.tipo_conta ? el('span', { class: ['muted', 'conta-chip-tipo'] }, meta.rotulo) : null,
+        ),
+      ),
+    ),
+    el('td', { class: 'num', 'data-rotulo': 'Total' }, fmtMoeda(totalConta)),
+    el(
+      'td',
+      { class: 'col-pct', 'data-rotulo': '% do total' },
+      el(
+        'div',
+        { class: 'pct-cel' },
+        el(
+          // aria-hidden: a barra e´ reforco visual; o percentual em texto (.pct-txt) ao
+          // lado ja´ diz o numero, entao anuncia-lo de novo seria ruido no leitor de tela.
+          'div',
+          { class: ['bar', 'bar-mini'], 'aria-hidden': 'true' },
+          el('div', { class: 'bar-fill', style: { width: `${largura}%`, background: cor } }),
+        ),
+        el('span', { class: 'pct-txt' }, fmtPct(pct)),
+      ),
+    ),
+    el('td', { class: 'num', 'data-rotulo': 'Média/mês' }, fmtMoeda(totalConta / 12)),
+    el('td', { class: 'num', 'data-rotulo': 'Compras' }, String(num(conta.transacoes))),
   );
 }
 

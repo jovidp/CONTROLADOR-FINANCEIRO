@@ -74,8 +74,26 @@ test('chaveTentativa: separa por usuário E por origem', () => {
 
   // Atras do Tailscale/proxy o IP real vem no cabecalho; o socket seria sempre o proxy.
   assert.equal(
-    chaveTentativa(req('127.0.0.1', { 'x-forwarded-for': '9.9.9.9, 10.0.0.1' }), 'joao'),
+    chaveTentativa(req('127.0.0.1', { 'x-forwarded-for': '9.9.9.9' }), 'joao'),
     chaveTentativa(req('outro', { 'x-forwarded-for': '9.9.9.9' }), 'joao'),
+  );
+});
+
+test('chaveTentativa: o cliente NÃO escolhe a própria chave', () => {
+  const req = (cab) => ({ headers: cab, socket: { remoteAddress: '127.0.0.1' } });
+
+  // O X-Forwarded-For e´ uma lista que cada proxy vai ANEXANDO -- e o comeco dela pode
+  // ter vindo do proprio cliente. O codigo antigo lia o PRIMEIRO item (`.split(',')[0]`),
+  // entao bastava mandar um X-Forwarded-For diferente a cada tentativa para cair numa
+  // chave nova toda vez: o freio contava ate´ 1 para sempre, e a forca bruta era livre.
+  // O item confiavel e´ o ULTIMO: quem o escreveu foi o Tailscale, e nao o atacante.
+  const forjado = (lixo) => chaveTentativa(req({ 'x-forwarded-for': `${lixo}, 9.9.9.9` }), 'vitima');
+
+  assert.equal(forjado('1.1.1.1'), forjado('2.2.2.2'), 'trocar o prefixo forjado não pode gerar chave nova');
+  assert.equal(
+    forjado('1.1.1.1'),
+    chaveTentativa(req({ 'x-forwarded-for': '9.9.9.9' }), 'vitima'),
+    'com ou sem prefixo forjado, a chave é a mesma: a do IP que o proxy escreveu',
   );
 });
 

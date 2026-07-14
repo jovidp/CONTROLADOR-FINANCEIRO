@@ -95,7 +95,13 @@ test('mesParaIntervalo: fecha o mês no último dia certo', () => {
 test('traduzErroPg: erro do banco vira mensagem que o usuário entende', () => {
   assert.equal(traduzErroPg({ code: '23505' }).status, 409, 'nome duplicado');
   assert.equal(traduzErroPg({ code: '23514' }).status, 400, 'CHECK violado');
-  assert.equal(traduzErroPg({ code: '23502', column: 'valor' }).campo, 'valor');
+
+  // not_null_violation vira 400 generico e NAO ecoa o nome da coluna: o identificador
+  // interno do banco (usuario_id, tipo_id...) desenharia o schema para quem sonda a API.
+  const nulo = traduzErroPg({ code: '23502', column: 'usuario_id' });
+  assert.equal(nulo.status, 400);
+  assert.equal(nulo.campo, undefined, 'não vaza o nome da coluna');
+  assert.ok(!nulo.message.includes('usuario_id'), 'a mensagem não contém o nome interno');
 
   // O isolamento por usuario (migration 012) fez as FKs compostas passarem a
   // disparar 23503 quando alguem tenta usar a categoria/conta de OUTRO usuario.

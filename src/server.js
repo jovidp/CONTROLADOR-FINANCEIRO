@@ -6,6 +6,7 @@ import { config } from './config.js';
 import { pool, closePool } from './db.js';
 import { HttpError, traduzErroPg } from './http.js';
 import { exigirLogin, prepararUsuariosDados, sessaoDe, sessaoValida } from './auth.js';
+import { cabecalhosSeguranca, ipDoCliente } from './seguranca.js';
 import { processarRecorrentes } from './services/recorrentes.js';
 import * as manutencao from './manutencao.js';
 
@@ -21,9 +22,35 @@ import recorrentes from './routes/recorrentes.js';
 import relatorios from './routes/relatorios.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC = path.join(__dirname, '../public');
 const app = express();
 
 const temSessaoValida = (req) => sessaoValida(sessaoDe(req));
+
+// "Server: Express" numa resposta e´ so´ uma dica de graca para quem varre a internet
+// procurando versao vulneravel. Nao esconde nada de quem olha de perto -- mas nao ha´
+// razao para anunciar.
+app.disable('x-powered-by');
+
+/**
+ * O Tailscale (Serve/Funnel) entrega a conexao ao node vindo do 127.0.0.1 e conta quem
+ * era o cliente de verdade no X-Forwarded-For. Sem isto, `req.ip` seria SEMPRE
+ * 127.0.0.1: o freio de tentativas veria a internet inteira como um unico visitante --
+ * cinco senhas erradas de um desconhecido trancariam o login de todo mundo.
+ *
+ * 'loopback' e´ o ponto exato: o express confia no proxy local (que e´ nosso) e em mais
+ * ninguem. Ele anda pelo X-Forwarded-For da direita para a esquerda e para no primeiro
+ * endereco que nao e´ de confianca -- que e´ justamente o que o Tailscale escreveu, e
+ * nao o que o cliente inventou. `trust proxy: true` (confiar em todos) devolveria o
+ * bug: o cliente escolheria o proprio IP.
+ */
+app.set('trust proxy', 'loopback');
+
+app.use(cabecalhosSeguranca([
+  path.join(PUBLIC, 'index.html'),
+  path.join(PUBLIC, 'login.html'),
+  path.join(PUBLIC, 'manutencao.html'),
+]));
 
 app.use(express.json({ limit: '2mb' }));
 
@@ -59,7 +86,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/')) {
     return res.json({ erro: emManutencao.motivo || 'Servidor em manutenção. Tente de novo em instantes.' });
   }
-  return res.sendFile(path.join(__dirname, '../public/manutencao.html'));
+  return res.sendFile(path.join(PUBLIC, 'manutencao.html'));
 });
 
 // --- Porta de entrada das PAGINAS ------------------------------------
@@ -80,7 +107,7 @@ app.get('/login.html', (req, res, next) => {
 // O frontend não tem build step. Durante o desenvolvimento, não manter HTML,
 // CSS e módulos antigos em cache evita que a interface fique diferente do
 // código salvo no projeto.
-app.use(express.static(path.join(__dirname, '../public'), {
+app.use(express.static(PUBLIC, {
   setHeaders(res) {
     res.setHeader('Cache-Control', 'no-store');
   },
@@ -89,8 +116,24 @@ app.use(express.static(path.join(__dirname, '../public'), {
 // Publica: e por aqui que a sessao nasce (o freio de tentativas mora em auth.js).
 app.use('/api/auth', auth);
 
-app.get('/api/health', async (_req, res, next) => {
+const LOCAIS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+/**
+ * Publica, mas fala pouco com quem vem de fora.
+ *
+ * O `ehEsteApp()` la´ embaixo precisa do nome do banco para distinguir "a porta esta´
+ * ocupada por MIM" de "esta´ ocupada por outro programa", e ele chama daqui mesmo, do
+ * 127.0.0.1. Ja´ para a internet -- que e´ quem alcanca esta rota com o Funnel ligado --
+ * o nome do banco e a versao exata do PostgreSQL nao servem a nada alem de poupar o
+ * trabalho de quem procura uma versao com falha conhecida. Entao: local ve tudo, o
+ * resto do mundo ve que o app esta´ vivo.
+ */
+app.get('/api/health', async (req, res, next) => {
   try {
+    if (!LOCAIS.has(ipDoCliente(req))) {
+      await pool.query('SELECT 1');
+      return res.json({ ok: true });
+    }
     const { rows } = await pool.query('SELECT now() AS agora, current_database() AS banco, version() AS versao');
     res.json({ ok: true, ...rows[0] });
   } catch (err) {
@@ -193,6 +236,18 @@ async function sair(codigo) {
 }
 
 async function iniciar() {
+  // SESSION_SECRET fraco assina o cookie com uma chave adivinhavel: quem cria uma conta
+  // ve o proprio token (payload + HMAC), pode forcar a chave offline e depois forjar o
+  // token de QUALQUER usuario. Se estiver definido, exigimos forca; se estiver vazio, o
+  // auth.js sorteia um efemero forte (e todos deslogam a cada reinicio). Isto e a trava
+  // que o comentario do config.js sempre prometeu e nunca teve.
+  if (config.auth.segredo && config.auth.segredo.length < 32) {
+    console.error('\n  SESSION_SECRET é curto demais (< 32 caracteres) — chave de sessão fraca.');
+    console.error('  Gere um forte:  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    console.error('  Cole no .env em SESSION_SECRET, ou remova a linha para usar um efêmero.\n');
+    return sair(1);
+  }
+
   try {
     await pool.query('SELECT 1');
   } catch (err) {

@@ -252,6 +252,83 @@ router.get(
 );
 
 // =====================================================================
+// GET /api/relatorios/contas?mes=AAAA-MM&tipo=despesa  (ou de/ate)
+// Gastos (ou receitas) agrupados por CONTA/CARTAO. Espelha /categorias.
+// =====================================================================
+router.get(
+  '/contas',
+  asyncHandler(async (req, res) => {
+    const tipo = enumerado(req.query.tipo ?? 'despesa', 'tipo', ['receita', 'despesa']);
+
+    // Mesmo tratamento de periodo do /categorias: 'mes' e´ atalho para de/ate; sem
+    // nenhum filtro, cai no mes corrente para nao varrer o historico inteiro.
+    let de = null;
+    let ate = null;
+    if (req.query.mes) {
+      ({ inicio: de, fim: ate } = mesParaIntervalo(req.query.mes));
+    } else {
+      de = data(req.query.de, 'de', { obrigatorio: false });
+      ate = data(req.query.ate, 'ate', { obrigatorio: false });
+      if (!de && !ate) ({ inicio: de, fim: ate } = mesParaIntervalo(mesCorrente()));
+    }
+    if (de && ate && de > ate) throw badRequest('"de" não pode ser depois de "ate".', 'de');
+
+    const params = [tipo, req.sessao.id];
+    const clausulas = ['t.tipo = $1', 't.usuario_id = $2', 'NOT t.oculta'];
+    if (de) {
+      params.push(de);
+      clausulas.push(`t.data >= $${params.length}`);
+    }
+    if (ate) {
+      params.push(ate);
+      clausulas.push(`t.data <= $${params.length}`);
+    }
+
+    // Transferencia nao entra: o filtro tipo IN ('despesa','receita') ja´ a exclui, entao
+    // pagar a fatura do cartao (transferencia) nao vira "gasto" nenhuma vez.
+    const { rows } = await query(
+      `WITH filtradas AS (
+         SELECT t.conta_id, t.valor
+         FROM transacoes t
+         WHERE ${clausulas.join(' AND ')}
+       ),
+       periodo AS (
+         SELECT COALESCE(SUM(valor), 0) AS geral FROM filtradas
+       )
+       SELECT
+         f.conta_id,
+         COALESCE(c.nome, 'Sem conta') AS nome,
+         COALESCE(c.cor, '#94a3b8') AS cor,
+         c.tipo AS tipo_conta,
+         SUM(f.valor) AS total,
+         COUNT(*) AS transacoes,
+         CASE
+           WHEN (SELECT geral FROM periodo) > 0
+             THEN ROUND(SUM(f.valor) * 100 / (SELECT geral FROM periodo), 1)
+           ELSE 0
+         END AS percentual
+       FROM filtradas f
+       LEFT JOIN contas c ON c.id = f.conta_id AND c.usuario_id = $2
+       GROUP BY f.conta_id, c.nome, c.cor, c.tipo
+       ORDER BY total DESC, nome ASC`,
+      params,
+    );
+
+    res.json(
+      rows.map((row) => ({
+        conta_id: row.conta_id,
+        nome: row.nome,
+        cor: row.cor,
+        tipo_conta: row.tipo_conta, // chave do tipo (credito, cartao-debito...) ou null
+        total: arred(row.total),
+        percentual: arred(row.percentual, 1),
+        transacoes: Number(row.transacoes),
+      })),
+    );
+  }),
+);
+
+// =====================================================================
 // GET /api/relatorios/anual?ano=2026
 // =====================================================================
 router.get(

@@ -8,8 +8,10 @@
  * backup ANTES de apagar qualquer coisa -- e abortam se o backup falhar. Um comando
  * irreversivel sem rede embaixo e´ o tipo de coisa que so´ da´ errado uma vez.
  *
- * Restaurar:
- *   pg_restore -h localhost -U fin_app -d controlador_financeiro --clean backups/<arquivo>.dump
+ * Com BACKUP_CHAVE preenchida no .env, o dump sai CIFRADO (.dump.enc) e o texto claro e´
+ * apagado -- ver src/cripto.js. Restaurar, nos dois casos:
+ *
+ *   npm run db:restore -- backups/<arquivo>
  */
 import { spawn } from 'node:child_process';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
@@ -17,6 +19,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config.js';
+import { cifrarArquivo, EXTENSAO } from '../cripto.js';
 import { sob } from '../manutencao.js';
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -30,25 +33,30 @@ const MANTER = 20;
  * O instalador do PostgreSQL no Windows NAO poe os binarios no PATH. Chamar
  * `pg_dump` cru funciona no Linux e falha na maquina onde este app roda -- entao
  * procuramos o .exe no lugar de sempre antes de desistir.
+ *
+ * Exportado porque o restore precisa achar o `pg_restore` exatamente do mesmo jeito.
  */
-function acharPgDump() {
-  if (process.platform !== 'win32') return 'pg_dump';
+export function acharBinarioPg(nome) {
+  if (process.platform !== 'win32') return nome;
 
   const base = 'C:/Program Files/PostgreSQL';
   if (existsSync(base)) {
     // Versao mais nova primeiro (18 antes de 16).
     const versoes = readdirSync(base).sort((a, b) => Number(b) - Number(a));
     for (const v of versoes) {
-      const exe = path.join(base, v, 'bin', 'pg_dump.exe');
+      const exe = path.join(base, v, 'bin', `${nome}.exe`);
       if (existsSync(exe)) return exe;
     }
   }
-  return 'pg_dump'; // Ultima tentativa: quem sabe esta´ no PATH.
+  return nome; // Ultima tentativa: quem sabe esta´ no PATH.
 }
 
 async function podar() {
   const arquivos = (await readdir(DIR))
-    .filter((f) => f.endsWith('.dump'))
+    // `.dump` e `.dump.enc` entram na MESMA poda: sao a mesma coisa, cifrada ou nao, e
+    // contar so´ um dos dois deixaria os antigos acumulando para sempre depois que a
+    // BACKUP_CHAVE fosse ligada.
+    .filter((f) => f.endsWith('.dump') || f.endsWith(`.dump${EXTENSAO}`))
     .map((f) => path.join(DIR, f));
   if (arquivos.length <= MANTER) return;
 
@@ -69,7 +77,7 @@ export async function backup(motivo = 'manual') {
 
   const carimbo = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const arquivo = path.join(DIR, `${config.db.database}_${carimbo}_${motivo}.dump`);
-  const pgDump = acharPgDump();
+  const pgDump = acharBinarioPg('pg_dump');
 
   console.log(`  ... gerando backup (${motivo})`);
 
@@ -102,11 +110,28 @@ export async function backup(motivo = 'manual') {
     });
   });
 
-  const { size } = await stat(arquivo);
-  console.log(`  = backup salvo: backups/${path.basename(arquivo)} (${(size / 1024).toFixed(0)} KB)`);
+  // Cifra o dump e APAGA o texto claro. A ordem importa: enquanto o .dump original
+  // existir, o .enc ao lado nao protege nada.
+  let final = arquivo;
+  if (config.backup.chave) {
+    final = `${arquivo}${EXTENSAO}`;
+    try {
+      await cifrarArquivo(arquivo, final, config.backup.chave);
+    } catch (err) {
+      // O .enc pela metade seria pior que backup nenhum: parece um backup e nao e´.
+      await rm(final, { force: true });
+      throw new Error(`falha ao cifrar o backup: ${err.message}`);
+    }
+    await rm(arquivo, { force: true });
+  } else {
+    console.warn('  ! BACKUP_CHAVE vazia no .env: este backup está em TEXTO CLARO.');
+  }
+
+  const { size } = await stat(final);
+  console.log(`  = backup salvo: backups/${path.basename(final)} (${(size / 1024).toFixed(0)} KB)`);
 
   await podar();
-  return arquivo;
+  return final;
 }
 
 // Rodado direto (`npm run db:backup`), e nao importado por outro script.
