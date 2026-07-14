@@ -11,15 +11,15 @@ import {
   segundosBloqueado, registrarFalha, registrarAcerto,
 } from '../src/auth.js';
 
-test('gerarHash: nunca guarda a senha, e nunca repete o mesmo hash', () => {
-  const hash = gerarHash('minha senha secreta');
+test('gerarHash: nunca guarda a senha, e nunca repete o mesmo hash', async () => {
+  const hash = await gerarHash('minha senha secreta');
 
   assert.match(hash, /^scrypt\$16384\$8\$1\$[\w+/=]+\$[\w+/=]+$/);
   assert.ok(!hash.includes('minha senha secreta'), 'a senha em claro não pode aparecer');
 
   // Salt aleatorio: a MESMA senha gera hashes diferentes. Sem isso, dois usuarios com a
   // senha "1234" teriam hashes identicos -- e quebrar um quebraria os dois.
-  assert.notEqual(gerarHash('1234'), gerarHash('1234'));
+  assert.notEqual(await gerarHash('1234'), await gerarHash('1234'));
 });
 
 test('criarToken: payload legível, assinatura que não se forja', () => {

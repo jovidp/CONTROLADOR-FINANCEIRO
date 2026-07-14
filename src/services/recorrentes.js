@@ -15,10 +15,18 @@ export const FREQUENCIAS = ['diaria', 'semanal', 'mensal', 'anual'];
 const TETO_POR_RECORRENTE = 500;
 
 /**
- * Teto de passos do laco de datas. Serve so como rede de seguranca contra um
- * proxima_data absurdamente antigo (cobre ~270 anos de frequencia diaria).
+ * Teto de passos do laco de datas POR RECORRENTE. Rede de seguranca contra um
+ * proxima_data antigo (cobre ~19 anos de frequencia diaria).
  */
-const TETO_ITERACOES = 100_000;
+const TETO_ITERACOES = 7_000;
+
+/**
+ * Teto de passos SOMADO entre todas as recorrentes de UMA chamada. Sem ele, muitas
+ * recorrentes atrasadas fariam o laco rodar centenas de milhares de vezes -- CPU sincrona
+ * na thread unica do Node, congelando o app para todos (DoS que o red-team confirmou).
+ * Estourado o orcamento, o resto fica para a proxima rodada; o processo e idempotente.
+ */
+const ORCAMENTO_ITERACOES = 20_000;
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
@@ -109,6 +117,7 @@ export async function processarRecorrentes(usuarioId) {
     );
 
     let totalGerado = 0;
+    let orcamento = ORCAMENTO_ITERACOES;
 
     for (const rec of recorrentes) {
       // Datas sao strings 'AAAA-MM-DD': comparacao lexicografica == cronologica.
@@ -117,8 +126,9 @@ export async function processarRecorrentes(usuarioId) {
       let passos = 0;
       const ocorrencias = [];
 
-      while (proxima <= hoje && passos < TETO_ITERACOES) {
+      while (proxima <= hoje && passos < TETO_ITERACOES && orcamento > 0) {
         passos++;
+        orcamento--;
 
         // Acima do teto paramos de lancar, mas seguimos avancando a data ate
         // ultrapassar hoje -- assim a recorrente volta ao trilho na proxima rodada
@@ -169,6 +179,10 @@ export async function processarRecorrentes(usuarioId) {
         `UPDATE recorrentes SET proxima_data = $1, ativa = $2 WHERE id = $3 AND usuario_id = $4`,
         [proxima, continuaAtiva, rec.id, usuarioId],
       );
+
+      // Orcamento da chamada esgotado: as recorrentes restantes ficam para a proxima
+      // rodada (sao idempotentes). Isso limita o tempo TOTAL de CPU de uma unica chamada.
+      if (orcamento <= 0) break;
     }
 
     return totalGerado;

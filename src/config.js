@@ -2,6 +2,13 @@ import 'dotenv/config';
 
 export const config = {
   port: Number(process.env.PORT || 3000),
+  // Em qual endereco o servidor escuta. Padrao 127.0.0.1 (so´ o loopback) porque o
+  // bind local NAO tem HTTPS: em 0.0.0.0 qualquer maquina da rede alcanca o app por
+  // http://<ip>:PORT e a SENHA viaja em texto claro pelo cabo. O Tailscale (Serve e
+  // Funnel) faz proxy de 127.0.0.1, entao tailnet e internet continuam funcionando --
+  // com TLS. Quem realmente precisar do acesso cru pela LAN poe HOST=0.0.0.0 no .env,
+  // sabendo o que esta´ abrindo.
+  host: process.env.HOST || '127.0.0.1',
   db: {
     host: process.env.PGHOST || 'localhost',
     port: Number(process.env.PGPORT || 5432),

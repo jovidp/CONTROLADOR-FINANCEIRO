@@ -69,16 +69,21 @@ export function enumerado(valor, campo, permitidos, { obrigatorio = true } = {})
   return s;
 }
 
+// As colunas de id sao int4 (serial). Um numero acima disso nao e´ "id que nao existe":
+// ele estoura o int4 no Postgres e vira erro 22003 -> 500 generico. Barramos aqui, com um
+// 400 limpo, em vez de deixar o banco reclamar.
+const MAX_INT4 = 2_147_483_647;
+
 export function idOpcional(valor, campo) {
   if (valor === undefined || valor === null || valor === '' || valor === 'null') return null;
   const n = Number(valor);
-  if (!Number.isInteger(n) || n <= 0) throw badRequest(`"${campo}" inválido.`, campo);
+  if (!Number.isInteger(n) || n <= 0 || n > MAX_INT4) throw badRequest(`"${campo}" inválido.`, campo);
   return n;
 }
 
 export function idParam(valor) {
   const n = Number(valor);
-  if (!Number.isInteger(n) || n <= 0) throw badRequest('ID inválido.', 'id');
+  if (!Number.isInteger(n) || n <= 0 || n > MAX_INT4) throw badRequest('ID inválido.', 'id');
   return n;
 }
 

@@ -1,20 +1,30 @@
 import { Router } from 'express';
 import {
+  atividadeLogin,
   cadastrarUsuario,
   cadastroStatus,
   chaveTentativa,
+  confirmar2FA,
   conferirCredenciais,
   conviteConfere,
   criarToken,
+  desativar2FA,
+  exige2FA,
   exigirLogin,
   gravarCookie,
+  iniciar2FA,
+  invalidarSessoes,
   limparCookie,
   registrarAcerto,
   registrarFalha,
+  registrarLogin,
   segundosBloqueado,
   sessaoDe,
   sessaoValida,
+  status2FA,
   trocarSenha,
+  verificarSegundoFator,
+  versaoToken,
 } from '../auth.js';
 import { criarFreio, ipDoCliente, problemaNaSenha } from '../seguranca.js';
 import { asyncHandler, booleano, HttpError, texto } from '../http.js';
@@ -55,6 +65,26 @@ const freioIpLogin = criarFreio({
   bloqueioMaxMs: 60_000,
   esquecerAposMs: 5 * 60_000,
 });
+
+/**
+ * Freio das operacoes autenticadas CARAS: trocar senha e ligar 2FA fazem hash scrypt
+ * (~100ms de CPU cada; confirmar 2FA gera 8 codigos = ~900ms). Sem freio, um usuario
+ * logado repetiria a rota em rajada e cada chamada congelaria a thread unica do Node,
+ * degradando o app para todos (DoS que o red-team apontou). Por usuario.
+ */
+const freioSensivel = criarFreio({
+  maxFalhas: 10,
+  bloqueioBaseMs: 10_000,
+  bloqueioMaxMs: 60_000,
+  esquecerAposMs: 5 * 60_000,
+});
+
+function limitarSensivel(req) {
+  const chave = `u${req.sessao.id}`;
+  const espera = freioSensivel.segundosBloqueado(chave);
+  if (espera > 0) throw new HttpError(429, `Muitas operações seguidas. Tente de novo em ${espera}s.`);
+  freioSensivel.registrarFalha(chave);
+}
 
 /** O que vai para o logs/servidor.log. A senha, obviamente, nunca. */
 function auditar(evento, req, usuario) {
@@ -97,10 +127,33 @@ router.post('/login', asyncHandler(async (req, res) => {
     throw new HttpError(401, 'Usuário ou senha incorretos.');
   }
 
+  // Segundo fator (2FA), se o usuario ativou. A senha ja´ passou; agora falta o codigo do
+  // app autenticador -- e´ isto que protege a conta mesmo com a senha vazada.
+  if (await exige2FA(credencial.id)) {
+    const codigo = texto(req.body?.codigo, 'codigo', { obrigatorio: false, max: 20 });
+    if (!codigo) {
+      // Senha certa, mas falta o 2º fator: nao e´ erro de credencial (nao gasta o freio de
+      // senha). O frontend mostra o campo de codigo e reenvia com senha + codigo.
+      return res.json({ precisa_2fa: true });
+    }
+    if (!(await verificarSegundoFator(credencial.id, codigo))) {
+      registrarFalha(chave); // codigo errado conta como tentativa (freia o chute dos 6 digitos)
+      auditar('2FA NEGADO', req, credencial.usuario);
+      throw new HttpError(401, 'Código de verificação inválido.', 'codigo');
+    }
+  }
+
   registrarAcerto(chave);
   freioIpLogin.registrarAcerto(origem); // login certo zera o teto por IP tambem
-  gravarCookie(res, criarToken({ lembrar, usuario: credencial.usuario, usuarioId: credencial.id }), req);
-  res.json({ usuario });
+  // O login que DA´ CERTO tambem entra no log, e nao so´ o negado. Sem isto, uma senha
+  // roubada entra sem deixar rastro nenhum: nao havia como responder "alguem alem de mim
+  // entrou nesta conta?". O IP vem do ipDoCliente (o real, do proxy), entao um acesso de
+  // origem estranha aparece no logs/servidor.log.
+  auditar('login OK', req, credencial.usuario);
+  const alerta = await registrarLogin(credencial.id, origem);
+  const versao = await versaoToken(credencial.id);
+  gravarCookie(res, criarToken({ lembrar, usuario: credencial.usuario, usuarioId: credencial.id, versao }), req);
+  res.json({ usuario, alerta_login: alerta });
 }));
 
 router.post('/cadastro', asyncHandler(async (req, res) => {
@@ -186,6 +239,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
  * conhece-la. Sem freio proprio -- quem chega aqui ja tem sessao valida.
  */
 router.post('/senha', exigirLogin, asyncHandler(async (req, res) => {
+  limitarSensivel(req);
   const senhaAtual = texto(req.body?.senha_atual, 'senha_atual', { max: 200 });
   const senhaNova = texto(req.body?.senha_nova, 'senha_nova', { max: 200 });
   const confirmacao = texto(req.body?.confirmacao, 'confirmacao', { max: 200 });
@@ -195,9 +249,53 @@ router.post('/senha', exigirLogin, asyncHandler(async (req, res) => {
   if (senhaNova !== confirmacao) throw new HttpError(400, 'As senhas não são iguais.', 'confirmacao');
   if (senhaNova === senhaAtual) throw new HttpError(400, 'A senha nova é igual à atual.', 'senha_nova');
 
-  await trocarSenha(req.sessao.id, senhaAtual, senhaNova);
+  const { token_versao } = await trocarSenha(req.sessao.id, senhaAtual, senhaNova);
   auditar('senha TROCADA', req, req.sessao.u);
+  // A troca subiu a versão e derrubou TODAS as sessões (inclusive uma roubada). Reemite
+  // o cookie de quem trocou, já na versão nova, para não deslogar a própria pessoa.
+  gravarCookie(res, criarToken({ usuario: req.sessao.u, usuarioId: req.sessao.id, versao: token_versao }), req);
   res.json({ ok: true });
+}));
+
+/** Sair de todos os dispositivos: sobe a versão (derruba as outras sessões) e mantém esta. */
+router.post('/sair-todos', exigirLogin, asyncHandler(async (req, res) => {
+  const versao = await invalidarSessoes(req.sessao.id);
+  auditar('sair de todos', req, req.sessao.u);
+  gravarCookie(res, criarToken({ usuario: req.sessao.u, usuarioId: req.sessao.id, versao }), req);
+  res.json({ ok: true });
+}));
+
+// --- 2FA (verificação em duas etapas) --------------------------------
+// Todas autenticadas (exigirLogin próprio, já que /api/auth vem antes do exigirLogin
+// global). Configurar o 2FA já exige estar logado.
+
+router.get('/2fa/status', exigirLogin, asyncHandler(async (req, res) => {
+  res.json(await status2FA(req.sessao.id));
+}));
+
+/** Passo 1: gera o segredo e devolve a chave + URI para o app autenticador. */
+router.post('/2fa/iniciar', exigirLogin, asyncHandler(async (req, res) => {
+  limitarSensivel(req);
+  res.json(await iniciar2FA(req.sessao.id, req.sessao.u));
+}));
+
+/** Passo 2: confirma o primeiro código, ativa o 2FA e devolve os códigos de recuperação. */
+router.post('/2fa/confirmar', exigirLogin, asyncHandler(async (req, res) => {
+  limitarSensivel(req);
+  const codigo = texto(req.body?.codigo, 'codigo', { max: 20 });
+  res.json(await confirmar2FA(req.sessao.id, codigo));
+}));
+
+/** Desliga o 2FA (exige a senha E um fator atual). */
+router.post('/2fa/desativar', exigirLogin, asyncHandler(async (req, res) => {
+  const senha = texto(req.body?.senha, 'senha', { max: 200 });
+  const codigo = texto(req.body?.codigo, 'codigo', { max: 20 });
+  res.json(await desativar2FA(req.sessao.id, senha, codigo));
+}));
+
+/** Atividade recente de login, para a tela de Segurança. */
+router.get('/atividade', exigirLogin, asyncHandler(async (req, res) => {
+  res.json({ eventos: await atividadeLogin(req.sessao.id) });
 }));
 
 export default router;

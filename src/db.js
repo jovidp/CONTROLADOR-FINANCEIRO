@@ -16,6 +16,11 @@ export const pool = new Pool({
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
+  // Teto por query: o Postgres cancela sozinho o que passar de 15s. Sem isto, uma
+  // consulta cara (relatorio com intervalo enorme, busca com curinga a esquerda) podia
+  // segurar uma das 10 conexoes indefinidamente e, repetida, esgotar o pool -- travando
+  // a API para todos. 15s e´ folgado para o uso normal e curto para um abuso.
+  statement_timeout: 15_000,
   application_name: 'controlador-financeiro',
 });
 

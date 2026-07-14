@@ -97,6 +97,15 @@
       <span>Continuar conectado neste computador por 30 dias</span>
     </label>
 
+    <!-- Aparece só quando o servidor responde precisa_2fa (login.js). -->
+    <div id="campo2fa" class="campo campo-cheio hidden">
+      <label class="campo-label" for="codigo2fa">Código de verificação</label>
+      <input id="codigo2fa" class="input" name="codigo" type="text"
+             inputmode="numeric" autocomplete="one-time-code" maxlength="20"
+             placeholder="6 dígitos do app">
+      <small class="campo-dica">Abra seu app autenticador (Google Authenticator, Authy…). Sem o celular? Use um código de recuperação.</small>
+    </div>
+
     <p id="erro" class="campo-erro login-erro hidden" role="alert" aria-live="polite"></p>
     <p id="sucesso" class="login-sucesso hidden" role="status" aria-live="polite"></p>
 

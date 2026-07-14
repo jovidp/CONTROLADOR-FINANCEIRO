@@ -302,10 +302,15 @@ async function iniciar() {
     return sair(1);
   }
 
-  const server = app.listen(config.port, () => {
+  const server = app.listen(config.port, config.host, () => {
     console.log('\n  Controlador Financeiro no ar');
     console.log(`  http://localhost:${config.port}`);
-    console.log(`  banco: ${config.db.database} @ ${config.db.host}:${config.db.port}\n`);
+    if (config.host !== '127.0.0.1') {
+      console.log(`\n  ATENÇÃO: escutando em ${config.host} — o app está exposto na rede local`);
+      console.log('  em HTTP puro, e a senha de quem entrar por ali trafega em texto claro.');
+      console.log('  Para fechar: remova o HOST do .env (volta para 127.0.0.1).');
+    }
+    console.log(`\n  banco: ${config.db.database} @ ${config.db.host}:${config.db.port}\n`);
   });
 
   // Backstop: a checagem acima cobre o caso normal, mas outro processo pode

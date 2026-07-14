@@ -985,7 +985,7 @@ th.col-acoes { text-align: right; white-space: nowrap; }
   white-space: nowrap;
 }
 
-.tag-ok, .badge-ok, .badge-in {
+.tag-ok, .badge-ok, .badge-in, .tag-atual {
   background: var(--in-suave);
   border-color: color-mix(in srgb, var(--in) 35%, transparent);
   color: var(--in);
@@ -1973,6 +1973,63 @@ div.campo {
 .senha-regras em { font-style: normal; color: var(--texto); opacity: 0.85; }
 .senha-dica { margin-top: 8px; line-height: 1.4; }
 .senha-dica em { font-style: italic; }
+
+/* --- 2FA e atividade (tela de Segurança) --- */
+.card-2fa-corpo,
+.card-atividade-corpo { display: grid; gap: 12px; }
+.card-2fa-corpo .primary-btn,
+.card-2fa-corpo .danger-btn { justify-self: start; }
+
+.passos-2fa {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 5px;
+  color: var(--texto-fraco);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.chave-2fa { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.chave-2fa code {
+  padding: 10px 14px;
+  border: 1px solid var(--borda);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  word-break: break-all;
+}
+
+.codigos-recup {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.codigos-recup code {
+  padding: 9px 10px;
+  border: 1px solid var(--borda);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  text-align: center;
+  font-size: 0.98rem;
+  letter-spacing: 0.08em;
+}
+
+.atividade-lista { list-style: none; margin: 0; padding: 0; }
+.atividade-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--borda);
+  font-size: 0.88rem;
+}
+.atividade-item:last-child { border-bottom: 0; }
+.atividade-ip { font-weight: 600; }
+.atividade-quando { margin-left: auto; }
 
 .campo-erro {
   font-size: 0.78rem;

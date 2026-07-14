@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { cifrarArquivo, decifrarArquivo } from '../src/cripto.js';
+import { cifrarArquivo, decifrarArquivo, cifrarTexto, decifrarTexto } from '../src/cripto.js';
 
 const CHAVE = 'chave-de-teste-nao-usada-em-lugar-nenhum';
 
@@ -30,6 +30,22 @@ async function comPasta(fn) {
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+test('cifrarTexto/decifrarTexto: segredo TOTP em repouso (round-trip, chave errada, legado)', async () => {
+  const segredo = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+
+  const enc = await cifrarTexto(segredo, CHAVE);
+  assert.ok(enc.startsWith('enc:'), 'tem o prefixo enc:');
+  assert.ok(!enc.includes(segredo), 'o texto em claro não aparece');
+  assert.equal(await decifrarTexto(enc, CHAVE), segredo, 'volta idêntico');
+
+  await assert.rejects(() => decifrarTexto(enc, 'chave-errada'), 'chave errada não decifra');
+
+  // Sem prefixo = valor legado em claro: passa direto (compatibilidade).
+  assert.equal(await decifrarTexto(segredo, CHAVE), segredo);
+  // Sem chave, cifrarTexto devolve em claro (o chamador avisa/decide).
+  assert.equal(await cifrarTexto(segredo, ''), segredo);
+});
 
 test('cifrar e decifrar devolve o arquivo IDÊNTICO, byte a byte', async () => {
   await comPasta(async (dir) => {

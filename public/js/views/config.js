@@ -1,27 +1,19 @@
 /**
- * View "Configurações" — contas, estado do banco e comandos úteis.
+ * View "Configurações" — contas, tipos de conta, troca de senha e estado do banco.
  *
  * As contas são buscadas na API a cada montagem (e não lidas de state.contas):
  * o saldo muda a cada transação lançada, e uma escrita em transações chama
  * emitir() SEM recarregar a base — o cache do state teria saldo velho.
- *
- * Backup NÃO é feito por aqui: o dado vive no PostgreSQL, então o backup é
- * pg_dump. A seção "Sobre" entrega o comando pronto para copiar.
  */
 
 import { api, ApiError } from '../api.js';
 import { tipoContaPorChave } from '../state.js';
-import { el, fmtMoeda, hoje, skeleton, vazio, toast } from '../ui.js';
+import { el, fmtMoeda, skeleton, vazio, toast } from '../ui.js';
 import { excluirCom, formConta, formTipoConta } from '../forms.js';
 import { num } from '../dominio.js';
 
 const COR_SAIDA = 'var(--out, #ef4444)';
 const COR_PADRAO = '#64748b';
-
-// Padrões do .env (src/config.js). Só entram no comando de pg_dump quando o
-// /api/health não responde — o contrato do health não expõe usuário/host do banco.
-const BANCO_PADRAO = 'controlador_financeiro';
-const USUARIO_PADRAO = 'fin_app';
 
 // =====================================================================
 // Montagem
@@ -32,14 +24,13 @@ export async function montar(container) {
 
   skeleton(container, 5);
 
-  // allSettled: o banco fora do ar não pode apagar a tela inteira — é justamente
-  // quando o usuário precisa ver o selo vermelho e os comandos para religar.
-  const [resContas, resTipos, resHealth] = await Promise.allSettled([
+  // allSettled: uma seção fora do ar não pode apagar a tela inteira — as outras
+  // continuam renderizando, cada uma com o seu próprio estado de erro.
+  const [resContas, resTipos] = await Promise.allSettled([
     api.contas.listar({ incluir_arquivadas: true }),
     // Buscado aqui (e não lido de state.tiposConta) pelo mesmo motivo das contas: só
     // esta resposta traz quantas contas usam cada tipo, e esse número muda o tempo todo.
     api.tiposConta.listar(),
-    api.health(),
   ]);
 
   const contas = resContas.status === 'fulfilled' && Array.isArray(resContas.value)
@@ -52,15 +43,10 @@ export async function montar(container) {
     : null;
   const erroTipos = resTipos.status === 'rejected' ? resTipos.reason : null;
 
-  const health = resHealth.status === 'fulfilled' ? resHealth.value : null;
-  const erroHealth = resHealth.status === 'rejected' ? resHealth.reason : null;
-
   container.replaceChildren(
     secaoContas(container, contas, erroContas),
     secaoTipos(container, tipos, erroTipos),
     secaoSeguranca(),
-    secaoBanco(health, erroHealth),
-    secaoSobre(health),
   );
 }
 
@@ -133,6 +119,270 @@ function secaoSeguranca() {
       ),
       form,
     ),
+    cartao2FA(),
+    cartaoAtividade(),
+  );
+}
+
+// --- Helpers locais --------------------------------------------------
+
+/** timestamp ISO -> data/hora local legível. */
+function horaLegivel(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR');
+}
+
+/**
+ * Copia texto para a área de transferência e dá um feedback no botão.
+ * navigator.clipboard só existe em contexto seguro (https ou localhost); o plano B
+ * com textarea + execCommand cobre o acesso por IP na rede local.
+ */
+async function copiar(texto, botao) {
+  const rotulo = botao.textContent;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(texto);
+    } else {
+      const area = el('textarea', {
+        value: texto, readOnly: true,
+        style: { position: 'fixed', top: '-1000px', opacity: '0' },
+      });
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    botao.textContent = '✅ copiado';
+    setTimeout(() => { botao.textContent = rotulo; }, 1500);
+  } catch {
+    toast('Não consegui copiar. Selecione o texto e use Ctrl+C.', 'erro');
+  }
+}
+
+// --- Verificação em duas etapas (2FA) --------------------------------
+
+function cartao2FA() {
+  const corpo = el('div', { class: 'card-2fa-corpo' }, el('p', { class: 'muted' }, 'Carregando…'));
+  render2FA(corpo);
+  return el(
+    'div',
+    { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', {}, 'Verificação em duas etapas (2FA)')),
+    corpo,
+  );
+}
+
+async function render2FA(corpo) {
+  let st;
+  try {
+    st = await api.auth.status2fa();
+  } catch {
+    corpo.replaceChildren(el('p', { class: 'muted' }, 'Não consegui carregar o estado do 2FA.'));
+    return;
+  }
+  if (st.ativo) render2FAAtivo(corpo, st);
+  else render2FAInativo(corpo);
+}
+
+function render2FAInativo(corpo) {
+  const btn = el('button', { class: 'primary-btn', type: 'button' }, '🔐 Ativar 2FA');
+  btn.addEventListener('click', () => enrollIniciar(corpo, btn));
+  corpo.replaceChildren(
+    el(
+      'p',
+      { class: 'muted' },
+      'Uma segunda barreira além da senha: um código de 6 dígitos que muda a cada 30 segundos, ' +
+        'gerado por um app no seu celular (Google Authenticator, Authy, Microsoft Authenticator). ' +
+        'Mesmo que a senha vaze, ninguém entra sem o seu celular.',
+    ),
+    btn,
+  );
+}
+
+async function enrollIniciar(corpo, btn) {
+  btn.disabled = true;
+  try {
+    const { segredo } = await api.auth.iniciar2fa();
+    enrollMostrarChave(corpo, segredo);
+  } catch (err) {
+    toast(err instanceof ApiError ? err.message : 'Não consegui iniciar o 2FA.', 'erro');
+    btn.disabled = false;
+  }
+}
+
+function enrollMostrarChave(corpo, segredo) {
+  const chaveFmt = segredo.match(/.{1,4}/g).join(' ');
+  const btnCopiar = el('button', { class: 'link-btn', type: 'button' }, '📋 copiar chave');
+  btnCopiar.addEventListener('click', () => copiar(segredo, btnCopiar));
+
+  const codigo = el('input', {
+    class: 'input', type: 'text', inputmode: 'numeric', maxlength: '6',
+    placeholder: '000000', 'aria-label': 'Código do app',
+  });
+  const btnConfirmar = el('button', { class: 'primary-btn', type: 'submit' }, 'Confirmar e ativar');
+
+  const form = el(
+    'form',
+    { class: 'form-grid', autocomplete: 'off' },
+    el('div', { class: 'campo' }, codigo),
+    btnConfirmar,
+  );
+  form.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    btnConfirmar.disabled = true;
+    try {
+      const { codigos } = await api.auth.confirmar2fa({ codigo: codigo.value.trim() });
+      enrollMostrarRecuperacao(corpo, codigos);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Código incorreto.', 'erro');
+      btnConfirmar.disabled = false;
+      codigo.focus();
+    }
+  });
+
+  corpo.replaceChildren(
+    el(
+      'ol',
+      { class: 'passos-2fa' },
+      el('li', {}, 'No app autenticador, escolha "adicionar conta" → "inserir uma chave de configuração".'),
+      el('li', {}, 'Nome: Controlador Financeiro. Chave (digite exatamente, sem os espaços):'),
+    ),
+    el('div', { class: 'chave-2fa' }, el('code', {}, chaveFmt), btnCopiar),
+    el('p', { class: 'muted' }, 'Depois, digite abaixo o código de 6 dígitos que o app mostrar:'),
+    form,
+  );
+  codigo.focus();
+}
+
+function enrollMostrarRecuperacao(corpo, codigos) {
+  const btnCopiar = el('button', { class: 'link-btn', type: 'button' }, '📋 copiar todos');
+  btnCopiar.addEventListener('click', () => copiar(codigos.join('\n'), btnCopiar));
+  const btnConcluir = el('button', { class: 'primary-btn', type: 'button' }, 'Guardei — concluir');
+  btnConcluir.addEventListener('click', () => { toast('2FA ativado com sucesso.', 'ok'); render2FA(corpo); });
+
+  corpo.replaceChildren(
+    el(
+      'div',
+      { class: 'form-alerta' },
+      '⚠️ Guarde estes códigos de recuperação AGORA — eles não aparecem de novo. ' +
+        'Cada um serve UMA vez, para entrar caso você perca o celular.',
+    ),
+    el('div', { class: 'codigos-recup' }, codigos.map((c) => el('code', {}, c))),
+    btnCopiar,
+    btnConcluir,
+  );
+}
+
+function render2FAAtivo(corpo, st) {
+  const btn = el('button', { class: 'danger-btn', type: 'button' }, 'Desativar 2FA');
+  btn.addEventListener('click', () => render2FADesativar(corpo, st));
+  corpo.replaceChildren(
+    el('span', { class: ['selo', 'selo-ok'] }, el('span', { class: 'selo-ponto', 'aria-hidden': 'true' }), 'ativo'),
+    el(
+      'p',
+      { class: 'muted' },
+      `Está ligada — o login pede o código do app. Você tem ${st.recuperacao_restantes} ` +
+        'código(s) de recuperação restante(s).',
+    ),
+    btn,
+  );
+}
+
+function render2FADesativar(corpo, st) {
+  const senha = el('input', {
+    class: 'input', type: 'password', autocomplete: 'current-password',
+    placeholder: 'Sua senha', 'aria-label': 'Sua senha',
+  });
+  const codigo = el('input', {
+    class: 'input', type: 'text', inputmode: 'numeric', maxlength: '20',
+    placeholder: 'Código do app ou de recuperação', 'aria-label': 'Código',
+  });
+  const btn = el('button', { class: 'danger-btn', type: 'submit' }, 'Desativar');
+  const btnCancelar = el('button', { class: 'btn', type: 'button' }, 'Cancelar');
+  btnCancelar.addEventListener('click', () => render2FAAtivo(corpo, st));
+
+  const form = el(
+    'form',
+    { class: 'form-grid', autocomplete: 'off' },
+    el('div', { class: 'campo' }, senha),
+    el('div', { class: 'campo' }, codigo),
+    el('div', { class: 'btn-row' }, btn, btnCancelar),
+  );
+  form.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    btn.disabled = true;
+    try {
+      await api.auth.desativar2fa({ senha: senha.value, codigo: codigo.value.trim() });
+      toast('2FA desativado.', 'ok');
+      render2FA(corpo);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Não consegui desativar.', 'erro');
+      btn.disabled = false;
+    }
+  });
+
+  corpo.replaceChildren(
+    el('p', { class: 'muted' }, 'Para desligar, confirme com a senha e um código atual.'),
+    form,
+  );
+  senha.focus();
+}
+
+// --- Atividade recente de login --------------------------------------
+
+function cartaoAtividade() {
+  const corpo = el('div', { class: 'card-atividade-corpo' }, el('p', { class: 'muted' }, 'Carregando…'));
+  renderAtividade(corpo);
+  return el(
+    'div',
+    { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', {}, 'Atividade recente')),
+    corpo,
+  );
+}
+
+async function renderAtividade(corpo) {
+  let res;
+  try {
+    res = await api.auth.atividade();
+  } catch {
+    corpo.replaceChildren(el('p', { class: 'muted' }, 'Não consegui carregar a atividade.'));
+    return;
+  }
+  const eventos = Array.isArray(res?.eventos) ? res.eventos : [];
+  if (!eventos.length) {
+    corpo.replaceChildren(el('p', { class: 'muted' }, 'Nenhum acesso registrado ainda.'));
+    return;
+  }
+  const btnSair = el('button', { class: 'danger-btn', type: 'button' }, 'Sair de todos os outros dispositivos');
+  btnSair.addEventListener('click', async () => {
+    btnSair.disabled = true;
+    try {
+      await api.auth.sairTodos();
+      toast('Pronto — as outras sessões foram encerradas. Esta continua ativa.', 'ok');
+      renderAtividade(corpo);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Não consegui encerrar as sessões.', 'erro');
+      btnSair.disabled = false;
+    }
+  });
+
+  corpo.replaceChildren(
+    el('p', { class: 'muted' }, 'Seus últimos acessos. Se algum IP não parecer seu, troque a senha e ative o 2FA.'),
+    el(
+      'ul',
+      { class: 'atividade-lista' },
+      eventos.map((ev, i) => el(
+        'li',
+        { class: 'atividade-item' },
+        el('span', { class: 'atividade-ip' }, ev.ip || '—'),
+        el('span', { class: ['atividade-quando', 'muted'] }, horaLegivel(ev.criado_em)),
+        i === 0 ? el('span', { class: ['tag', 'tag-atual'] }, 'este acesso') : null,
+      )),
+    ),
+    el('p', { class: 'muted', style: { marginTop: '4px' } },
+      'Perdeu um aparelho ou acha que alguém entrou? Encerre as outras sessões — você continua conectado aqui.'),
+    btnSair,
   );
 }
 
@@ -439,193 +689,4 @@ function excluirTipo(tipo) {
     // state.tiposConta alimenta o select de tipo do formulario de conta.
     recarregar: true,
   });
-}
-
-// =====================================================================
-// 3. Banco de dados
-// =====================================================================
-
-/** "PostgreSQL 18.0 on x86_64..., compiled by gcc" -> "PostgreSQL 18.0" */
-function versaoCurta(versao) {
-  const s = String(versao ?? '').trim();
-  if (!s) return '—';
-  const m = s.match(/^PostgreSQL\s+([\w.]+)/i);
-  return m ? `PostgreSQL ${m[1]}` : s.slice(0, 60);
-}
-
-/** timestamptz do banco -> data/hora local legível. */
-function horaLegivel(agora) {
-  const d = new Date(agora);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR');
-}
-
-function secaoBanco(health, erro) {
-  const conectado = Boolean(health?.ok);
-
-  const selo = el(
-    'span',
-    { class: ['selo', conectado ? 'selo-ok' : 'selo-erro'] },
-    el('span', { class: 'selo-ponto', 'aria-hidden': 'true' }),
-    conectado ? 'conectado' : 'sem conexão',
-  );
-
-  const corpo = conectado
-    ? el(
-        'dl',
-        { class: 'dados-lista' },
-        dado('Banco', health.banco || BANCO_PADRAO),
-        dado('Versão', versaoCurta(health.versao)),
-        // O contrato do GET /api/health (docs/API.md) devolve { ok, agora, banco, versao } —
-        // não expõe o host do PostgreSQL. Mostramos o host do servidor da aplicação, que é
-        // quem fala com o banco local, sem inventar um campo que a API não tem.
-        dado('Host (servidor da aplicação)', location.host || 'localhost'),
-        dado('Relógio do banco', horaLegivel(health.agora)),
-      )
-    : el(
-        'div',
-        { class: 'aviso-erro' },
-        el(
-          'p',
-          {},
-          erro instanceof ApiError
-            ? erro.message
-            : 'Não consegui falar com o servidor. Ele está rodando? (npm start)',
-        ),
-        el(
-          'p',
-          { class: 'muted' },
-          'Verifique se o serviço do PostgreSQL está ativo e se o arquivo .env aponta para o banco certo. ' +
-            'Depois, rode "npm start" novamente.',
-        ),
-      );
-
-  return el(
-    'section',
-    { class: 'secao' },
-    el(
-      'div',
-      { class: 'card' },
-      el('div', { class: 'card-head' }, el('h2', {}, 'Banco de dados'), selo),
-      corpo,
-    ),
-  );
-}
-
-function dado(rotulo, valor) {
-  return el(
-    'div',
-    { class: 'dado' },
-    el('dt', { class: 'muted' }, rotulo),
-    el('dd', {}, String(valor ?? '—')),
-  );
-}
-
-// =====================================================================
-// 4. Sobre / comandos
-// =====================================================================
-
-const COMANDOS = [
-  'npm start          # sobe o servidor (API + frontend)',
-  'npm run db:migrate # cria/atualiza o schema do banco',
-  'npm run db:seed    # popula o banco com dados de exemplo',
-].join('\n');
-
-function comandoBackup(banco) {
-  const arquivo = `${banco}_${hoje()}.dump`;
-  return [
-    `pg_dump -U ${USUARIO_PADRAO} -d ${banco} -F c -f ${arquivo}`,
-    `pg_restore -U ${USUARIO_PADRAO} -d ${banco} --clean ${arquivo}`,
-  ].join('\n');
-}
-
-function secaoSobre(health) {
-  const banco = health?.banco || BANCO_PADRAO;
-
-  return el(
-    'section',
-    { class: 'secao' },
-    el(
-      'div',
-      { class: 'card' },
-      el('div', { class: 'card-head' }, el('h2', {}, 'Comandos úteis')),
-      blocoComandos(COMANDOS, 'Comandos do projeto'),
-      el(
-        'p',
-        { class: ['muted', 'nota'] },
-        'Rode os comandos na pasta do projeto, num terminal.',
-      ),
-    ),
-    el(
-      'div',
-      { class: 'card' },
-      el('div', { class: 'card-head' }, el('h2', {}, 'Backup e restauração')),
-      el(
-        'p',
-        { class: 'muted' },
-        'O backup salva tudo (transações, contas, categorias, metas, orçamentos e recorrentes) ' +
-          'num arquivo só, que a restauração devolve.',
-      ),
-      blocoComandos(comandoBackup(banco), 'Comandos de backup'),
-      el(
-        'p',
-        { class: ['muted', 'nota'] },
-        `Banco: ${banco}. Ajuste -U (usuário), -h (host) e -p (porta) conforme o seu arquivo .env. ` +
-          'O pg_restore com --clean apaga os dados atuais antes de recriar — cuidado ao restaurar por cima.',
-      ),
-    ),
-  );
-}
-
-function blocoComandos(texto, rotulo) {
-  const btn = el('button', { class: 'link-btn', type: 'button' }, '📋 copiar');
-  btn.addEventListener('click', () => copiar(texto, btn));
-
-  return el(
-    'div',
-    { class: 'bloco-cmd' },
-    el('pre', { class: 'cmd', 'aria-label': rotulo }, el('code', {}, texto)),
-    btn,
-  );
-}
-
-/**
- * navigator.clipboard só existe em contexto seguro (https ou localhost). Como o app
- * pode ser aberto por IP na rede local, mantém um plano B com textarea + execCommand.
- */
-async function copiar(texto, botao) {
-  const rotulo = botao.textContent;
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(texto);
-    } else if (!copiarFallback(texto)) {
-      throw new Error('sem suporte a cópia');
-    }
-
-    botao.textContent = '✅ copiado';
-    setTimeout(() => {
-      botao.textContent = rotulo;
-    }, 1500);
-  } catch {
-    toast('Não consegui copiar. Selecione o texto e use Ctrl+C.', 'erro');
-  }
-}
-
-function copiarFallback(texto) {
-  const area = el('textarea', {
-    value: texto,
-    readOnly: true,
-    style: { position: 'fixed', top: '-1000px', opacity: '0' },
-  });
-  document.body.appendChild(area);
-  area.select();
-
-  let ok = false;
-  try {
-    ok = document.execCommand('copy');
-  } catch {
-    ok = false;
-  }
-  area.remove();
-  return ok;
 }

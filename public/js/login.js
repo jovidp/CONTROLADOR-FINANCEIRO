@@ -15,6 +15,8 @@ const cadastroErro = document.getElementById('cadastroErro');
 const usuario = document.getElementById('usuario');
 const senha = document.getElementById('senha');
 const lembrar = document.getElementById('lembrar');
+const campo2fa = document.getElementById('campo2fa');
+const codigo2fa = document.getElementById('codigo2fa');
 const btnEntrar = document.getElementById('btnEntrar');
 const btnVer = document.getElementById('btnVer');
 const erro = document.getElementById('erro');
@@ -59,7 +61,9 @@ function ocupadoCadastro(sim) {
 
 function ocupadoLogin(sim) {
   btnEntrar.disabled = sim;
-  btnEntrar.textContent = sim ? 'Entrando...' : 'Entrar';
+  // Com o campo de código à mostra, o botão confirma o 2º fator: "Verificar".
+  const parado = campo2fa.classList.contains('hidden') ? 'Entrar' : 'Verificar';
+  btnEntrar.textContent = sim ? 'Entrando...' : parado;
 }
 
 async function respostaJson(url, opcoes) {
@@ -130,6 +134,8 @@ async function entrar(ev) {
     return;
   }
 
+  const exibindo2fa = !campo2fa.classList.contains('hidden');
+
   ocupadoLogin(true);
   try {
     const { resposta, corpo } = await respostaJson('/api/auth/login', {
@@ -139,13 +145,24 @@ async function entrar(ev) {
         usuario: usuario.value.trim(),
         senha: senha.value,
         lembrar: lembrar.checked,
+        // Só vai preenchido no 2º envio, quando o campo de código está à mostra.
+        codigo: exibindo2fa ? codigo2fa.value.trim() : undefined,
       }),
     });
 
+    // Senha certa, mas a conta tem 2FA: revela o campo de código e espera o 2º envio.
+    if (resposta.ok && corpo?.precisa_2fa) {
+      campo2fa.classList.remove('hidden');
+      codigo2fa.required = true;
+      btnEntrar.textContent = 'Verificar';
+      codigo2fa.focus();
+      return;
+    }
+
     if (!resposta.ok) {
       mostrar(erro, corpo?.erro || `Erro ${resposta.status} ao entrar.`);
-      senha.value = '';
-      senha.focus();
+      // Erro no código: limpa só o código e mantém o campo aberto. Senão, limpa a senha.
+      if (exibindo2fa) { codigo2fa.value = ''; codigo2fa.focus(); } else { senha.value = ''; senha.focus(); }
       return;
     }
 

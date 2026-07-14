@@ -18,6 +18,19 @@ const router = express.Router();
 
 const TIPOS = ['receita', 'despesa'];
 
+/**
+ * Data limite (2 anos atras) para a proxima ocorrencia de uma recorrente. Uma recorrente
+ * comeca perto de hoje ou no futuro; uma proxima_data anos no passado so serviria para
+ * fazer o processarRecorrentes iterar dia a dia ate alcancar hoje -- o vetor de DoS que o
+ * red-team achou. Aqui e a barreira na ENTRADA; o orcamento do servico e a rede embaixo.
+ */
+function limiteMinimoProxima() {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 2);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 const SELECT_BASE = `
   SELECT r.id, r.descricao, r.valor, r.tipo,
          r.categoria_id,
@@ -63,6 +76,9 @@ function validarCorpo(body, { comAtiva = false } = {}) {
   const conta_id = idOpcional(body.conta_id, 'conta_id');
 
   // Datas 'AAAA-MM-DD' comparam lexicograficamente na ordem cronologica.
+  if (proxima_data < limiteMinimoProxima()) {
+    throw badRequest('"proxima_data" está muito no passado. Use uma data recente ou futura.', 'proxima_data');
+  }
   if (data_fim && data_fim < proxima_data) {
     throw badRequest('"data_fim" deve ser igual ou posterior à próxima data.', 'data_fim');
   }

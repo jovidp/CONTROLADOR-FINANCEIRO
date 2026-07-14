@@ -116,7 +116,14 @@ export const api = {
     // 401 de "senha errada" viraria um redirect para a propria tela de login.
     sessao: () => request('GET', '/auth/sessao'),
     sair: () => request('POST', '/auth/logout'),
+    sairTodos: () => request('POST', '/auth/sair-todos'),
     trocarSenha: (dados) => request('POST', '/auth/senha', { body: dados }),
+    // Verificação em duas etapas (2FA).
+    status2fa: () => request('GET', '/auth/2fa/status'),
+    iniciar2fa: () => request('POST', '/auth/2fa/iniciar'),
+    confirmar2fa: (dados) => request('POST', '/auth/2fa/confirmar', { body: dados }),
+    desativar2fa: (dados) => request('POST', '/auth/2fa/desativar', { body: dados }),
+    atividade: () => request('GET', '/auth/atividade'),
   },
 
   categorias: {

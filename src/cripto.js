@@ -22,6 +22,7 @@ import crypto from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { once } from 'node:events';
+import { promisify } from 'node:util';
 import { pipeline } from 'node:stream/promises';
 
 const MAGIC = Buffer.from('CFBK1', 'utf8');
@@ -34,7 +35,45 @@ export const EXTENSAO = '.enc';
 
 const SCRYPT = { N: 16384, r: 8, p: 1 };
 
-const derivar = (chave, salt) => crypto.scryptSync(chave, salt, 32, SCRYPT);
+// scrypt ASSINCRONO (threadpool do libuv). A versao Sync custa ~100ms de CPU e, num app
+// single-thread, o hash de UM usuario segurava as requisicoes de TODOS (DoS de event loop).
+const scrypt = promisify(crypto.scrypt);
+const derivar = (chave, salt) => scrypt(chave, salt, 32, SCRYPT);
+
+// --- Cifra de string curta (segredo TOTP em repouso) -----------------
+//
+// Diferente dos backups (arquivos, em stream), aqui e´ um texto curto. Formato do
+// resultado: "enc:" + base64(salt|iv|cifrado|tag). O prefixo distingue um valor
+// cifrado de um legado em claro -- assim a leitura sabe se precisa decifrar.
+
+const PREFIXO = 'enc:';
+
+/** Cifra um texto. Sem chave, devolve o texto em claro (o chamador decide se aceita). */
+export async function cifrarTexto(texto, chave) {
+  if (!chave) return texto;
+  const salt = crypto.randomBytes(TAM_SALT);
+  const iv = crypto.randomBytes(TAM_IV);
+  const cifra = crypto.createCipheriv('aes-256-gcm', await derivar(chave, salt), iv);
+  const corpo = Buffer.concat([cifra.update(String(texto), 'utf8'), cifra.final()]);
+  const pacote = Buffer.concat([salt, iv, corpo, cifra.getAuthTag()]);
+  return PREFIXO + pacote.toString('base64');
+}
+
+/** Decifra o que cifrarTexto gerou. Um valor sem o prefixo e´ tratado como texto legado. */
+export async function decifrarTexto(valor, chave) {
+  if (typeof valor !== 'string' || !valor.startsWith(PREFIXO)) return valor;
+  if (!chave) throw new Error('BACKUP_CHAVE ausente: não há como decifrar o segredo.');
+
+  const pacote = Buffer.from(valor.slice(PREFIXO.length), 'base64');
+  const salt = pacote.subarray(0, TAM_SALT);
+  const iv = pacote.subarray(TAM_SALT, TAM_SALT + TAM_IV);
+  const tag = pacote.subarray(pacote.length - TAM_TAG);
+  const corpo = pacote.subarray(TAM_SALT + TAM_IV, pacote.length - TAM_TAG);
+
+  const decifra = crypto.createDecipheriv('aes-256-gcm', await derivar(chave, salt), iv);
+  decifra.setAuthTag(tag);
+  return Buffer.concat([decifra.update(corpo), decifra.final()]).toString('utf8');
+}
 
 /** Cifra `entrada` em `saida`. Devolve o caminho de saida. */
 export async function cifrarArquivo(entrada, saida, chave) {
@@ -42,7 +81,7 @@ export async function cifrarArquivo(entrada, saida, chave) {
 
   const salt = crypto.randomBytes(TAM_SALT);
   const iv = crypto.randomBytes(TAM_IV);
-  const cifra = crypto.createCipheriv('aes-256-gcm', derivar(chave, salt), iv);
+  const cifra = crypto.createCipheriv('aes-256-gcm', await derivar(chave, salt), iv);
 
   const destino = createWriteStream(saida);
   destino.write(MAGIC);
@@ -94,7 +133,7 @@ export async function decifrarArquivo(entrada, saida, chave) {
   const salt = cabecalho.subarray(MAGIC.length, MAGIC.length + TAM_SALT);
   const iv = cabecalho.subarray(MAGIC.length + TAM_SALT);
 
-  const decifra = crypto.createDecipheriv('aes-256-gcm', derivar(chave, salt), iv);
+  const decifra = crypto.createDecipheriv('aes-256-gcm', await derivar(chave, salt), iv);
   decifra.setAuthTag(tag);
 
   try {

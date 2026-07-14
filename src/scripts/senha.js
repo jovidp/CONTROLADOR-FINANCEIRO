@@ -134,7 +134,7 @@ async function main() {
   }
 
   let depois = definir(antes, 'AUTH_USUARIO', usuario);
-  depois = definir(depois, 'AUTH_SENHA_HASH', gerarHash(senha));
+  depois = definir(depois, 'AUTH_SENHA_HASH', await gerarHash(senha));
   // Segredo novo a cada troca: e´ o que invalida os cookies de sessao antigos.
   depois = definir(depois, 'SESSION_SECRET', crypto.randomBytes(32).toString('hex'));
 
